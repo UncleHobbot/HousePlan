@@ -1,15 +1,36 @@
 # HousePlan
 
-## Agent skills
+## Язык общения и документации
 
-### Issue tracker
+**Всё пишем по-русски** — ответы в чате, документация, комментарии в коде,
+сообщения коммитов, названия и описания задач.
 
-Issues live in this repo's GitHub Issues, via the `gh` CLI. External PRs are **not** a triage surface. See `docs/agents/issue-tracker.md`.
+В команде есть участники без опыта программирования. Поэтому:
 
-### Triage labels
+- Объясняем нормальным человеческим языком, а не набором терминов.
+- Если технический термин действительно нужен (без него никак) — при первом
+  упоминании поясняем в скобках, что он значит.
+- Не пересказываем очевидное на жаргоне: «сохранили файл» лучше, чем
+  «выполнили персистентность артефакта».
+- Сначала суть и результат, потом — подробности реализации для тех, кому надо.
 
-Default vocabulary — `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Исключения, где английский остаётся: сам код (имена переменных, функций,
+классов), названия команд и библиотек, метки задач в GitHub.
 
-### Domain docs
+## Настройки для агентов
 
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+### Где живут задачи
+
+Задачи ведём в GitHub Issues этого репозитория, через утилиту `gh`. Внешние
+pull request'ы в разбор задач **не** попадают. Подробности —
+`docs/agents/issue-tracker.md`.
+
+### Метки для разбора задач
+
+Используем стандартный набор: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. Подробности — `docs/agents/triage-labels.md`.
+
+### Документация по предметной области
+
+Одна общая область: `CONTEXT.md` и папка `docs/adr/` в корне репозитория.
+Подробности — `docs/agents/domain.md`.
