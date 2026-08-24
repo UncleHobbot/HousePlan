@@ -1,0 +1,45 @@
+# Normalize all text files to LF in the repo and in the working tree.
+# LF everywhere matters here: this app ships as a Docker container on a
+# Synology DSM host, and CRLF in a shell script or entrypoint breaks it.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF or the shell won't run them.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Files that must be LF regardless of extension heuristics.
+*.sh          text eol=lf
+Dockerfile    text eol=lf
+Dockerfile.*  text eol=lf
+*.dockerfile  text eol=lf
+
+# Binaries — never touch, never diff as text.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.avif binary
+*.ico  binary
+*.pdf  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.zip  binary
+*.gz   binary
+*.mp4  binary
+*.sqlite  binary
+*.sqlite3 binary
+*.db   binary
+
+# SVG is text (object skins may be SVG), but don't try to merge it.
+*.svg text eol=lf -merge
+
+# Lockfiles: collapse in diffs and exclude from language stats.
+package-lock.json  linguist-generated=true -diff
+pnpm-lock.yaml     linguist-generated=true -diff
+yarn.lock          linguist-generated=true -diff
+uv.lock            linguist-generated=true -diff
+poetry.lock        linguist-generated=true -diff
