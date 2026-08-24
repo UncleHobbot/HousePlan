@@ -1,19 +1,23 @@
-# Triage Labels
+# Метки для разбора задач
 
-The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
+Когда в проект приходит новая задача, её нужно разобрать: понять, что это, и решить,
+что с ней делать дальше. Навыки описывают этот разбор через пять состояний. Здесь
+записано, какими метками GitHub эти состояния обозначаются у нас.
 
-| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
-| -------------------------- | -------------------- | ---------------------------------------- |
-| `needs-triage`             | `needs-triage`       | Maintainer needs to evaluate this issue  |
-| `needs-info`               | `needs-info`         | Waiting on reporter for more information |
-| `ready-for-agent`          | `ready-for-agent`    | Fully specified, ready for an AFK agent  |
-| `ready-for-human`          | `ready-for-human`    | Requires human implementation            |
-| `wontfix`                  | `wontfix`            | Will not be actioned                     |
+| Состояние в навыках | Наша метка         | Что означает                                          |
+| ------------------- | ------------------ | ----------------------------------------------------- |
+| `needs-triage`      | `needs-triage`     | Ещё не разобрана, нужно посмотреть и решить            |
+| `needs-info`        | `needs-info`       | Ждём уточнений от того, кто задачу завёл               |
+| `ready-for-agent`   | `ready-for-agent`  | Описана полностью, агент может взять и сделать сам     |
+| `ready-for-human`   | `ready-for-human`  | Нужен человек, автоматом не решается                   |
+| `wontfix`           | `wontfix`          | Делать не будем                                        |
 
-When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
+Когда навык упоминает состояние (например, «поставь метку готовности для агента»),
+берём соответствующую метку из правого столбца.
 
-Edit the right-hand column to match whatever vocabulary you actually use.
+Правый столбец можно менять под себя. Названия меток остаются английскими — по ним
+идёт точное совпадение строк, и перевод сломает автоматику.
 
-## Repo
+## Репозиторий
 
-All five labels exist in `UncleHobbot/HousePlan` (created 2026-08-23).
+Все пять меток заведены в `UncleHobbot/HousePlan` (создано 2026-08-23).

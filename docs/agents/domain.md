@@ -1,59 +1,75 @@
-# Domain Docs
+# Документация по предметной области
 
-How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+Здесь описано, как агентам читать документацию проекта, прежде чем лезть в код.
 
-## This repo's layout
+«Предметная область» — это то, чем занимается программа на языке её пользователей:
+проекты, этажи, помещения, объекты, снэпшоты. В отличие от того, как это устроено
+внутри — таблицы, функции, запросы.
 
-**Single-context.** One `CONTEXT.md` + `docs/adr/` at the repo root. There is no
-`CONTEXT-MAP.md` and there should not be one unless the frontend and backend develop
-genuinely divergent domain languages. Today they share one vocabulary (project, level,
-room, object, tolerance zone, service zone, snapshot), so one context is the honest model.
+## Что читать перед началом работы
 
-## Before exploring, read these
+- **`CONTEXT.md`** в корне проекта — словарь: какими словами мы называем вещи и что
+  именно каждое слово значит.
+- **`CONTEXT-MAP.md`** в корне, если он есть, — оглавление, которое ведёт к нескольким
+  отдельным `CONTEXT.md`. Тогда читаем те, что относятся к делу.
+- **Папку `docs/adr/`** — записи о принятых решениях по устройству программы. Читаем
+  те, что касаются области, где собираемся работать. ADR (architecture decision record)
+  — это короткая заметка вида «решили делать так, потому что…»: она фиксирует не
+  только само решение, но и причину, чтобы через полгода никто не переделал обратно.
 
-- **`CONTEXT.md`** at the repo root, or
-- **`CONTEXT-MAP.md`** at the repo root if it exists — it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`** — read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
+Если этих файлов нет — **просто работаем дальше молча**. Не сообщаем об их
+отсутствии и не предлагаем создать заранее. Они появляются сами собой, когда в
+разговоре действительно всплывает новый термин или принимается решение.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+## Как устроено у нас
 
-## File structure
+**Одна общая предметная область.** Один `CONTEXT.md` и одна папка `docs/adr/` в корне.
+Файла `CONTEXT-MAP.md` нет, и заводить его не нужно — разве что у видимой части
+программы и её серверной части однажды разойдётся язык и одни и те же слова начнут
+значить разное.
 
-Single-context repo — **this repo**:
+Так это выглядит у нас:
 
 ```
 /
 ├── CONTEXT.md
 ├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
+│   ├── 0001-хранение-планировок.md
+│   └── 0002-выбор-базы-данных.md
 └── src/
 ```
 
-Multi-context repo (presence of `CONTEXT-MAP.md` at the root) — **not this repo**, kept
-as a reference for a possible future promotion:
+А так — вариант с несколькими областями. **У нас не используется**, оставлено для
+справки на случай, если проект когда-нибудь разрастётся:
 
 ```
 /
 ├── CONTEXT-MAP.md
-├── docs/adr/                          ← system-wide decisions
+├── docs/adr/                          ← решения, общие для всей системы
 └── src/
-    ├── ordering/
+    ├── планировки/
     │   ├── CONTEXT.md
-    │   └── docs/adr/                  ← context-specific decisions
-    └── billing/
+    │   └── docs/adr/                  ← решения только по этой части
+    └── мебель/
         ├── CONTEXT.md
         └── docs/adr/
 ```
 
-## Use the glossary's vocabulary
+## Пользуемся словами из словаря
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+Если в тексте появляется понятие из предметной области — в названии задачи, в
+предложении что-то переделать, в названии теста — берём его ровно в том виде, как
+оно записано в `CONTEXT.md`. Не подменяем синонимами, особенно теми, от которых
+словарь прямо отговаривает.
 
-If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
+Если нужного понятия в словаре ещё нет — это сигнал. Либо мы придумываем слово,
+которого в проекте не существует (тогда стоит остановиться и подумать), либо в
+словаре действительно пробел (тогда его нужно пополнить).
 
-## Flag ADR conflicts
+## Замечаем противоречия с принятыми решениями
 
-If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
+Если то, что мы предлагаем, спорит с уже записанным решением из `docs/adr/`, надо
+сказать об этом прямо, а не тихо сделать по-своему:
 
-> _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
+> _Это противоречит решению ADR-0007 (хранение планировок), но вернуться к нему всё
+> же стоит, потому что…_
