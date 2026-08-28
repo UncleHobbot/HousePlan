@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ЧЕРНОВИК: рисование помещения и точные размеры</title>
+<style>
+  :root { --accent:#0e7490; --accent2:#0e749022; --bad:#b91c1c; --ok:#15803d; --ink:#1e293b; --paper:#f8fafc; --line:#cbd5e1; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; color:var(--ink); background:var(--paper); }
+  header { padding:14px 22px 10px; border-bottom:1px solid var(--line); background:#fff; }
+  header h1 { margin:0 0 6px; font-size:20px; }
+  header .q { max-width:900px; }
+  header .warn { display:inline-block; margin-top:6px; padding:2px 10px; border-radius:10px; background:#fef3c7; font-size:13px; }
+  main { display:flex; gap:14px; padding:14px 22px; align-items:flex-start; flex-wrap:wrap; }
+  #stage { flex:1 1 640px; min-width:480px; }
+  #panel { flex:0 0 330px; max-width:360px; display:flex; flex-direction:column; gap:12px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .card h2 { margin:0 0 8px; font-size:14px; text-transform:uppercase; letter-spacing:.4px; color:#64748b; }
+  #banner { margin-top:10px; padding:8px 12px; border-radius:8px; display:none; font-size:14px; }
+  #banner.info { display:block; background:#e0f2fe; }
+  #banner.ok { display:block; background:#dcfce7; }
+  #banner.bad { display:block; background:#fee2e2; }
+  svg { display:block; width:100%; background:#fff; border:1px solid var(--line); border-radius:10px; touch-action:none; user-select:none; }
+  .row { display:flex; gap:8px; align-items:center; margin:6px 0; flex-wrap:wrap; }
+  button { font:inherit; padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  input[type=number] { font:inherit; width:110px; padding:5px 8px; border:1px solid var(--line); border-radius:8px; }
+  input.bad { border-color:var(--bad); background:#fef2f2; }
+  .muted { color:#64748b; font-size:13px; }
+  ul.locks { list-style:none; margin:0; padding:0; }
+  ul.locks li { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px dashed #e2e8f0; }
+  .hint { font-size:13px; color:#64748b; }
+  details { font-size:14px; }
+  details summary { cursor:pointer; font-weight:600; }
+  details ol { margin:6px 0 0; padding-left:20px; }
+  details li { margin:4px 0; }
+  footer { padding:8px 22px 20px; color:#64748b; font-size:13px; }
+  #state-line b { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ЧЕРНОВИК редактора: рисование помещения и точные размеры</h1>
+  <div class="q"><b>Вопрос, который проверяет этот черновик:</b> понятно ли человеку рисовать
+  помещение «на глаз», прибивать точные размеры к участкам и видеть, как остальное
+  подстраивается — и что происходит, когда размеры противоречат друг другу.</div>
+  <div class="warn">Черновик выбрасывается после обсуждения. Ограничения черновика: пересчёт
+  размеров работает только по прямым углам и только по прямым участкам; углы готового контура
+  не двигаются; служебных зон и мебели здесь нет.</div>
+</header>
+
+<main>
+  <section id="stage">
+    <svg id="svg" viewBox="0 0 1000 640" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="banner"></div>
+  </section>
+
+  <aside id="panel">
+    <div class="card" id="state-line"></div>
+
+    <div class="card">
+      <h2>Прибить размер</h2>
+      <div id="sel-info" class="muted">Выберите две точки контура: сначала та, что останется на месте (точка А), затем вторая (точка Б).</div>
+      <div class="row">
+        <input type="number" id="len-input" min="10" step="1"> см
+        <button class="primary" id="pin-btn">Прибить</button>
+        <button id="sel-reset" title="Сбросить выбор точек">✕</button>
+      </div>
+      <div class="hint">Участок — прямой отрезок контура от А до Б (одна стена или несколько стен на одной линии). Точка А остаётся на месте, остальное подстраивается.</div>
+    </div>
+
+    <div class="card">
+      <h2>Замки</h2>
+      <ul class="locks" id="locks-list"></ul>
+      <div class="hint" id="locks-empty">Пока ни один размер не прибит.</div>
+    </div>
+
+    <div class="card">
+      <h2>Настройки и действия</h2>
+      <div class="row">
+        <label><input type="checkbox" id="snap" checked> прилипание (сетка 25 см и прямые углы)</label>
+      </div>
+      <div class="row">
+        <button id="example-btn">Загрузить Г-образную комнату</button>
+        <button id="reset-btn">Сбросить всё</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Сценарии для проверки</h2>
+      <details open>
+        <summary>1. Нарисовать помещение</summary>
+        <ol>
+          <li>Кликайте по полю — ставьте углы будущей комнаты (примерно, «на глаз»).</li>
+          <li>Кликните в первую точку — контур замкнётся.</li>
+          <li>Проведите по стене мышью: вы видите длины стен. Незамкнутый контур размер не примет.</li>
+        </ol>
+      </details>
+      <details>
+        <summary>2. Прибить размер</summary>
+        <ol>
+          <li>Кликните точку А1 (станет зелёной — это точка А, она не сдвинется).</li>
+          <li>Кликните соседнюю точку (станет синей — это Б).</li>
+          <li>Введите размер и нажмите «Прибить».</li>
+          <li>Смотрите: А стоит на месте, Б уезжает, противоположная стена подстраивается.</li>
+        </ol>
+        <p class="hint">На прямоугольнике прибивание одной стены делает равной ей противоположную — иначе контур не сойдётся.</p>
+      </details>
+      <details>
+        <summary>3. Противоречие</summary>
+        <ol>
+          <li>Кликните прямо по стене — поставите точку и разрежете стену на две.</li>
+          <li>Прибейте левой части 100 см, правой — 150 см (получится два замка).</li>
+          <li>Теперь выберите крайние точки этой стены и попробуйте прибить 300 см.</li>
+          <li>Прочитайте красное сообщение: программа называет замок-конфликтник.</li>
+        </ol>
+      </details>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  Клик по пустому полю — точка · клик по первой точке — замкнуть контур · клик по стене — разрезать стену точкой ·
+  белую точку на прямой стене можно тянуть вдоль стены · зелёная точка — А (неподвижна), синяя — Б.
+</footer>
+
+<script>
+/* =====================================================================
+   ЧИСТЫЙ МОДУЛЬ ГЕОМЕТРИИ (без DOM — его можно вынуть и дописать).
+   Все координаты — целые сантиметры.
+   Точки хранятся по порядку; стена i идёт из точки i в точку i+1 (по кругу).
+   Замок ссылается на точки по устойчивым id, чтобы не бояться вставок.
+   ===================================================================== */
+const DraftGeometry = (() => {
+  const MIN = 10; // минимальная длина стены, см
+
+  const initial = () => ({ points: [], nextPointId: 1, nextLockId: 1, locks: [], closed: false });
+
+  function dist2(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return dx * dx + dy * dy; }
+  function idxOf(s, id) { return s.points.findIndex(p => p.id === id); }
+  function wallVec(s, i) {
+    const n = s.points.length, a = s.points[i], b = s.points[(i + 1) % n];
+    return { dx: b.x - a.x, dy: b.y - a.y };
+  }
+  function wallLen(s, i) { const v = wallVec(s, i); return Math.abs(v.dx) + Math.abs(v.dy); } // ось одна — не ноль
+  function axisOf(v) { return v.dy === 0 ? 'H' : (v.dx === 0 ? 'V' : 'D'); }
+  function signOf(v) { return axisOf(v) === 'H' ? Math.sign(v.dx) : Math.sign(v.dy); }
+
+  function addPoint(s, x, y) {
+    const n = { ...s, points: [...s.points, { id: s.nextPointId, x: Math.round(x), y: Math.round(y) }] };
+    n.nextPointId = s.nextPointId + 1;
+    return n;
+  }
+  function closeContour(s) { return { ...s, closed: true }; }
+
+  // Разрезать стену w новой точкой
+  function splitWall(s, w, x, y) {
+    const pts = [...s.points];
+    pts.splice(w + 1, 0, { id: s.nextPointId, x: Math.round(x), y: Math.round(y) });
+    return { ...s, points: pts, nextPointId: s.nextPointId + 1 };
+  }
+
+  // Цепочка стен от точки aId до точки bId вперёд по обходу
+  function chainWalls(s, aId, bId) {
+    const n = s.points.length, a = idxOf(s, aId), b = idxOf(s, bId);
+    if (a < 0 || b < 0) return null;
+    const ws = []; let i = a;
+    while (i !== b) { ws.push(i); i = (i + 1) % n; if (ws.length > n) return null; }
+    return ws; // если a===b — пустая цепочка (весь контур)
+  }
+
+  function lockChains(s) { return s.locks.map(l => ({ lock: l, walls: chainWalls(s, l.aId, l.bId) || [] })); }
+  function wallsInLocks(s) { const set = new Set(); lockChains(s).forEach(c => c.walls.forEach(w => set.add(w))); return set; }
+
+  // Можно ли тянуть точку: она лежит на прямой стене (угол — нельзя), и обе половины не прибиты
+  function canSlide(s, pointId) {
+    const n = s.points.length, i = idxOf(s, pointId);
+    if (n < 3) return { ok: false, reason: 'Сначала нарисуйте контур.' };
+    const vp = wallVec(s, (i - 1 + n) % n), vn = wallVec(s, i);
+    if (axisOf(vp) === 'D' || axisOf(vn) === 'D' || axisOf(vp) !== axisOf(vn) || signOf(vp) !== signOf(vn))
+      return { ok: false, reason: 'Углы контура в черновике не двигаются — проверяем размеры, а не перетаскивание.' };
+    const busy = wallsInLocks(s);
+    if (busy.has((i - 1 + n) % n) || busy.has(i))
+      return { ok: false, reason: 'Эта точка держит прибитый размер — замок не двигается.' };
+    return { ok: true, axis: axisOf(vp) };
+  }
+
+  // Тянуть точку вдоль её прямой (с отступами от соседей)
+  function slidePoint(s, pointId, x, y) {
+    const can = canSlide(s, pointId);
+    if (!can.ok) return s;
+    const n = s.points.length, i = idxOf(s, pointId);
+    const a = s.points[(i - 1 + n) % n], b = s.points[(i + 1) % n];
+    let nx = Math.round(x), ny = Math.round(y);
+    if (can.axis === 'H') {
+      ny = a.y;
+      const lo = Math.min(a.x, b.x) + MIN, hi = Math.max(a.x, b.x) - MIN;
+      nx = Math.max(lo, Math.min(hi, nx));
+    } else {
+      nx = a.x;
+      const lo = Math.min(a.y, b.y) + MIN, hi = Math.max(a.y, b.y) - MIN;
+      ny = Math.max(lo, Math.min(hi, ny));
+    }
+    const pts = s.points.map(p => p.id === pointId ? { ...p, x: nx, y: ny } : p);
+    return { ...s, points: pts };
+  }
+
+  // Пересекает ли контур сам себя (только для замкнутого); возвращает пары номеров стен
+  function crossings(s) {
+    if (!s.closed) return [];
+    const n = s.points.length, out = [];
+    const seg = i => [s.points[i], s.points[(i + 1) % n]];
+    function cross(a, b, c, d) {
+      function o(p, q, r) { const v = (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); return v < 0 ? -1 : v > 0 ? 1 : 0; }
+      return o(a, b, c) !== o(a, b, d) && o(c, d, a) !== o(c, d, b);
+    }
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue;
+      const [p1, p2] = seg(i), [p3, p4] = seg(j);
+      if (cross(p1, p2, p3, p4)) out.push([i, j]);
+    }
+    return out;
+  }
+
+  // Информация об участке: можно ли его прибить и какова его длина
+  function chainInfo(s, aId, bId) {
+    if (!s.closed) return { ok: false, reason: 'Контур не замкнут.' };
+    if (aId === bId) return { ok: false, reason: 'Выберите две разные точки.' };
+    const n = s.points.length, ws = chainWalls(s, aId, bId);
+    if (!ws || ws.length === 0) return { ok: false, reason: 'Выберите две разные точки.' };
+    // в черновике весь контур обязан быть из прямых углов — иначе пересчёт не работает
+    for (let w = 0; w < n; w++)
+      if (axisOf(wallVec(s, w)) === 'D')
+        return { ok: false, reason: 'В контуре есть диагональная стена. Черновик прибивает размеры только по прямым углам — включите прилипание и нарисуйте заново.' };
+    let cur = 0;
+    for (const w of ws) {
+      const v = wallVec(s, w), ax = axisOf(v);
+      if (ax === 'D') return { ok: false, reason: 'В черновике не прибиваются диагональные стены — верните точку на прямой угол.' };
+      if (ax !== axisOf(wallVec(s, ws[0]))) return { ok: false, reason: 'Участок поворачивает. В черновике прибиваются только прямые отрезки контура.' };
+      cur += Math.abs(ax === 'H' ? v.dx : v.dy);
+    }
+    // прямолинейность: все знаки одинаковы
+    const sg = signOf(wallVec(s, ws[0]));
+    for (const w of ws) if (signOf(wallVec(s, w)) !== sg) return { ok: false, reason: 'Участок должен идти по прямой, без «зигзага».' };
+    return { ok: true, walls: ws, axis: axisOf(wallVec(s, ws[0])), cur };
+  }
+
+  // Округление пропорциональных долей так, чтобы сумма сошлась точно
+  function scaledWithSum(cur, target) {
+    const sum = cur.reduce((a, b) => a + b, 0);
+    if (sum === 0) return cur.map(() => Math.round(target / cur.length));
+    const raw = cur.map(v => v * target / sum);
+    const res = raw.map(Math.round);
+    const order = raw.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]);
+    let diff = target - res.reduce((a, b) => a + b, 0), k = 0;
+    while (diff !== 0 && k < 10000) {
+      const i = order[k % order.length][1];
+      if (diff > 0) { res[i]++; diff--; }
+      else if (res[i] > MIN) { res[i]--; diff++; }
+      k++;
+    }
+    return res;
+  }
+
+  /* Прибить размер. Возвращает новое состояние или ошибку с именами замков-конфликтников. */
+  function tryLock(s, aId, bId, target) {
+    const info = chainInfo(s, aId, bId);
+    if (!info.ok) return { ok: false, error: { reason: info.reason } };
+    target = Math.round(target);
+    if (!(target >= MIN)) return { ok: false, error: { reason: 'Размер должен быть целым числом сантиметров, не меньше ' + MIN + '.' } };
+    const n = s.points.length, ws = info.walls, axis = info.axis;
+
+    // 1) тянем сам участок пропорционально
+    const newLen = Array.from({ length: n }, (_, i) => wallLen(s, i));
+    const chainCur = ws.map(w => newLen[w]);
+    scaledWithSum(chainCur, target).forEach((v, k) => { newLen[ws[k]] = v; });
+
+    // 2) замыкаем ось: свободные стены этой же оси (вне участка и вне замков) подстраиваются
+    const busy = wallsInLocks(s);
+    const sameAxis = [];
+    for (let w = 0; w < n; w++) if (axisOf(wallVec(s, w)) === axis) sameAxis.push(w);
+    const R = sameAxis.reduce((acc, w) => acc + signOf(wallVec(s, w)) * newLen[w], 0);
+    if (R !== 0) {
+      const free = sameAxis.filter(w => !ws.includes(w) && !busy.has(w));
+      const den = free.reduce((acc, w) => acc + signOf(wallVec(s, w)) * newLen[w], 0);
+      if (free.length === 0 || den === 0) {
+        const blockers = s.locks.filter(l => chainWalls(s, l.aId, l.bId).some(w => sameAxis.includes(w))).map(l => l.label);
+        return { ok: false, error: { reason: 'Замки на этой линии не оставляют свободы — контур не сойдётся.', conflicts: blockers } };
+      }
+      const t = -R / den;
+      const reb = free.map(w => Math.round(newLen[w] * (1 + t)));
+      // добивка округления: сумма со знаком по всей оси обязана стать нулём
+      const signedTotal = () => sameAxis.reduce((acc, w) => {
+        const k = free.indexOf(w);
+        return acc + signOf(wallVec(s, w)) * (k >= 0 ? reb[k] : newLen[w]);
+      }, 0);
+      let need = signedTotal(), guard = 0;
+      while (need !== 0 && guard < 10000) {
+        for (let k = 0; k < free.length && need !== 0; k++) {
+          if (need > 0) { reb[k]++; need--; }
+          else if (reb[k] > MIN) { reb[k]--; need++; }
+        }
+        guard++;
+      }
+      free.forEach((w, k) => { newLen[w] = reb[k]; });
+      if (free.some(w => newLen[w] < MIN) || signedTotal() !== 0)
+        return { ok: false, error: { reason: 'Свободным стенам не хватает места — такой размер не помещается.' } };
+    }
+
+    // 3) проверяем ВСЕ старые замки — иначе конфликт с именами
+    const broken = [];
+    for (const l of s.locks) {
+      const cw = chainWalls(s, l.aId, l.bId);
+      const sum = cw.reduce((acc, w) => acc + newLen[w], 0);
+      if (sum !== l.len) broken.push(l.label);
+    }
+    if (broken.length)
+      return { ok: false, error: { reason: 'Не сходится: этот размер противоречит уже прибитым замкам.', conflicts: broken } };
+
+    // 4) строим новые точки: точка А неподвижна, идём по кругу
+    const aIdx = idxOf(s, aId);
+    const pts = Array.from({ length: n }, () => null);
+    pts[aIdx] = { ...s.points[aIdx] };
+    let back = null;
+    for (let k = 0; k < n; k++) {
+      const w = (aIdx + k) % n, cur = pts[w];
+      const v = wallVec(s, w), ax = axisOf(v);
+      let nv;
+      if (ax === 'D') nv = { dx: v.dx, dy: v.dy };             // диагональ не трогаем
+      else {
+        const sg = signOf(v);
+        nv = ax === 'H' ? { dx: sg * newLen[w], dy: 0 } : { dx: 0, dy: sg * newLen[w] };
+      }
+      back = { x: cur.x + nv.dx, y: cur.y + nv.dy };
+      if (k < n - 1) pts[(w + 1) % n] = { ...s.points[(w + 1) % n], x: back.x, y: back.y };
+    }
+    // страховка: обход обязан вернуться ровно в точку А
+    if (!back || back.x !== pts[aIdx].x || back.y !== pts[aIdx].y)
+      return { ok: false, error: { reason: 'Контур не сошёлся — это ошибка черновика, пожалуйста, сообщите, какие размеры вводили.' } };
+
+    const lock = { id: s.nextLockId, aId, bId, len: target, label: `А${s.points[aIdx].id}–А${s.points[idxOf(s, bId)].id} = ${target}` };
+    return { ok: true, state: { ...s, points: pts, locks: [...s.locks, { ...lock }] , nextLockId: s.nextLockId + 1 } };
+  }
+
+  function removeLock(s, lockId) { return { ...s, locks: s.locks.filter(l => l.id !== lockId) }; }
+
+  return { initial, addPoint, closeContour, splitWall, canSlide, slidePoint, chainInfo, tryLock, removeLock, crossings, wallLen, axisOf, idxOf };
+})();
+</script>
+
+<script>
+/* ===================== СТРАНИЦА: отрисовка и события ===================== */
+const svg = document.getElementById('svg');
+const banner = document.getElementById('banner');
+const selInfo = document.getElementById('sel-info');
+const lenInput = document.getElementById('len-input');
+const pinBtn = document.getElementById('pin-btn');
+const locksList = document.getElementById('locks-list');
+const locksEmpty = document.getElementById('locks-empty');
+const stateLine = document.getElementById('state-line');
+const snapBox = document.getElementById('snap');
+
+let S = DraftGeometry.initial();
+let selA = null, selB = null;      // выбранные точки для участка
+let drag = null;                    // {id}
+let mouse = null;                   // текущая позиция мыши в см
+
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function say(kind, text) { banner.className = kind; banner.textContent = text; }
+
+/* масштаб: вписываем контур в поле с полями */
+function fit() {
+  const xs = S.points.map(p => p.x), ys = S.points.map(p => p.y);
+  const minX = Math.min(0, ...xs) - 80, maxX = Math.max(600, ...xs) + 80;
+  const minY = Math.min(0, ...ys) - 80, maxY = Math.max(440, ...ys) + 80;
+  return { minX, minY, w: maxX - minX, h: maxY - minY, k: Math.min(1000 / (maxX - minX), 640 / (maxY - minY)) };
+}
+let F = fit();
+const X = x => (x - F.minX) * F.k, Y = y => (y - F.minY) * F.k;
+const invX = px => px / F.k + F.minX, invY = py => py / F.k + F.minY;
+
+function walls() {
+  const n = S.points.length, arr = [];
+  for (let i = 0; i < (S.closed ? n : n - 1); i++) arr.push(i);
+  return arr;
+}
+const crossSet = new Set();
+function busyWalls() {
+  const set = new Set();
+  for (const l of S.locks) {
+    const n = S.points.length; let i = DraftGeometry.idxOf(S, l.aId), b = DraftGeometry.idxOf(S, l.bId);
+    while (i !== b) { set.add(i); i = (i + 1) % n; }
+  }
+  return set;
+}
+
+function render() {
+  F = fit();
+  svg.innerHTML = '';
+  const n = S.points.length;
+  const crossSet = new Set(DraftGeometry.crossings(S).flat());
+
+  // сетка при прилипании
+  if (snapBox.checked) {
+    for (let gx = Math.ceil(F.minX / 25) * 25; gx < F.minX + F.w; gx += 25)
+      svg.appendChild(el('line', { x1: X(gx), y1: 0, x2: X(gx), y2: 640, stroke: '#eef2f7', 'stroke-width': 1 }));
+    for (let gy = Math.ceil(F.minY / 25) * 25; gy < F.minY + F.h; gy += 25)
+      svg.appendChild(el('line', { x1: 0, y1: Y(gy), x2: 1000, y2: Y(gy), stroke: '#eef2f7', 'stroke-width': 1 }));
+  }
+
+  const busy = busyWalls();
+  // стены
+  for (const i of walls()) {
+    const a = S.points[i], b = S.points[(i + 1) % n];
+    const ax = DraftGeometry.axisOf({ dx: b.x - a.x, dy: b.y - a.y });
+    const isCross = crossSet.has(i);
+    const color = isCross ? '#dc2626' : busy.has(i) ? '#134e4a' : ax === 'D' ? '#d97706' : '#64748b';
+    svg.appendChild(el('line', {
+      x1: X(a.x), y1: Y(a.y), x2: X(b.x), y2: Y(b.y),
+      stroke: color, 'stroke-width': busy.has(i) ? 5 : 3, 'stroke-linecap': 'round',
+      'stroke-dasharray': ax === 'D' ? '8 6' : 'none'
+    }));
+    const len = DraftGeometry.wallLen(S, i);
+    const mx = X((a.x + b.x) / 2), my = Y((a.y + b.y) / 2);
+    svg.appendChild(el('text', { x: mx + 6, y: my - 6, 'font-size': 13, fill: busy.has(i) ? '#134e4a' : '#475569', 'font-weight': busy.has(i) ? 700 : 400 }, len + (busy.has(i) ? ' 🔒' : '')));
+  }
+  // резинка пока рисуем
+  if (!S.closed && S.points.length > 0 && mouse) {
+    const last = S.points[n - 1];
+    svg.appendChild(el('line', { x1: X(last.x), y1: Y(last.y), x2: X(mouse.x), y2: Y(mouse.y), stroke: '#94a3b8', 'stroke-dasharray': '4 5' }));
+    if (S.points.length >= 3) {
+      const near = (X(mouse.x) - X(S.points[0].x)) ** 2 + (Y(mouse.y) - Y(S.points[0].y)) ** 2 < 22 ** 2;
+      svg.appendChild(el('circle', { cx: X(S.points[0].x), cy: Y(S.points[0].y), r: near ? 12 : 7, fill: 'none', stroke: near ? '#0e7490' : '#94a3b8', 'stroke-width': 2 }));
+    }
+  }
+  // точки
+  for (const p of S.points) {
+    const slide = DraftGeometry.canSlide(S, p.id).ok;
+    const fill = p.id === selA ? '#16a34a' : p.id === selB ? '#2563eb' : slide ? '#ffffff' : '#e2e8f0';
+    const c = el('circle', { cx: X(p.x), cy: Y(p.y), r: 7, fill, stroke: '#334155', 'stroke-width': 2, 'data-id': p.id, style: 'cursor:' + (slide ? 'grab' : 'default') });
+    svg.appendChild(c);
+    svg.appendChild(el('text', { x: X(p.x) + 11, y: Y(p.y) - 9, 'font-size': 13, 'font-weight': 700, fill: '#0f172a' }, 'А' + p.id));
+  }
+
+  // строка состояния
+  const cr = DraftGeometry.crossings(S);
+  stateLine.innerHTML = S.points.length === 0
+    ? 'Пусто. Кликайте по полю — это углы будущей комнаты.'
+    : `Точек: <b>${n}</b> · контур: <b>${S.closed ? 'замкнут' : 'рисуется'}</b>` +
+      (cr.length ? ' · <b style="color:#b91c1c">пересекает сам себя!</b>' : '') +
+      (S.points.some((p, i) => DraftGeometry.axisOf({ dx: S.points[(i + 1) % n].x - p.x, dy: S.points[(i + 1) % n].y - p.y }) === 'D') && S.closed ? ' · <b style="color:#b45309">есть диагональные стены</b>' : '');
+
+  // выбор участка
+  if (selA !== null && selB !== null) {
+    const info = DraftGeometry.chainInfo(S, selA, selB);
+    if (info.ok) {
+      selInfo.innerHTML = `Участок <b>А${idNum(selA)} → А${idNum(selB)}</b>: сейчас <b>${info.cur} см</b>. Точка А${idNum(selA)} останется на месте.`;
+      lenInput.value = info.cur; lenInput.disabled = false; pinBtn.disabled = false;
+    } else {
+      selInfo.innerHTML = `<span style="color:#b91c1c">${info.reason}</span>`;
+      lenInput.disabled = true; pinBtn.disabled = true;
+    }
+  } else if (selA !== null) {
+    selInfo.innerHTML = `Точка А выбрана: <b>А${idNum(selA)}</b>. Теперь выберите точку Б.`;
+    lenInput.disabled = true; pinBtn.disabled = true;
+  } else {
+    selInfo.textContent = 'Выберите две точки контура: сначала та, что останется на месте (точка А), затем вторая (точка Б).';
+    lenInput.disabled = true; pinBtn.disabled = true;
+  }
+
+  // замки
+  locksList.innerHTML = '';
+  locksEmpty.style.display = S.locks.length ? 'none' : 'block';
+  for (const l of S.locks) {
+    const li = document.createElement('li');
+    const span = document.createElement('span'); span.textContent = l.label;
+    const btn = document.createElement('button'); btn.textContent = 'снять'; btn.onclick = () => { S = DraftGeometry.removeLock(S, l.id); say('info', `Замок «${l.label}» снят — участок снова свободен.`); render(); };
+    li.append(span, btn); locksList.appendChild(li);
+  }
+}
+function idNum(id) { return id; }
+
+/* ---------- события мыши ---------- */
+function svgPoint(ev) {
+  const r = svg.getBoundingClientRect();
+  return { x: invX((ev.clientX - r.left) / r.width * 1000), y: invY((ev.clientY - r.top) / r.height * 640) };
+}
+function snapPoint(raw) {
+  if (!snapBox.checked) return { x: Math.round(raw.x), y: Math.round(raw.y) };
+  let x = Math.round(raw.x / 25) * 25, y = Math.round(raw.y / 25) * 25;
+  const last = S.points[S.points.length - 1];
+  if (last) {
+    const useX = Math.abs(raw.x - last.x) < Math.abs(raw.y - last.y);
+    if (Math.abs(raw.x - last.x) < 45 && useX) x = last.x;
+    else if (Math.abs(raw.y - last.y) < 45) y = last.y;
+  }
+  return { x, y };
+}
+function nearFirst(p) {
+  if (S.points.length < 3) return false;
+  const f = S.points[0];
+  return (X(p.x) - X(f.x)) ** 2 + (Y(p.y) - Y(f.y)) ** 2 < 22 ** 2;
+}
+function wallAt(p) {
+  for (const i of walls()) {
+    const a = S.points[i], b = S.points[(i + 1) % n()];
+    const ax = DraftGeometry.axisOf({ dx: b.x - a.x, dy: b.y - a.y });
+    const eps = 10 / F.k;
+    if (ax === 'H' && Math.abs(p.y - a.y) < eps && p.x > Math.min(a.x, b.x) - eps && p.x < Math.max(a.x, b.x) + eps) return { i, x: Math.round(p.x), y: a.y };
+    if (ax === 'V' && Math.abs(p.x - a.x) < eps && p.y > Math.min(a.y, b.y) - eps && p.y < Math.max(a.y, b.y) + eps) return { i, x: a.x, y: Math.round(p.y) };
+  }
+  return null;
+}
+function n() { return S.points.length; }
+function pointAt(p) {
+  for (const q of S.points) if ((X(p.x) - X(q.x)) ** 2 + (Y(p.y) - Y(q.y)) ** 2 < 14 ** 2) return q;
+  return null;
+}
+
+svg.addEventListener('mousemove', ev => {
+  const p = svgPoint(ev); mouse = p;
+  if (drag) { S = DraftGeometry.slidePoint(S, drag, p.x, p.y); render(); return; }
+  if (!S.closed && S.points.length > 0) render();
+});
+svg.addEventListener('mouseleave', () => { mouse = null; render(); });
+svg.addEventListener('mousedown', ev => {
+  const p = pointAt(svgPoint(ev));
+  if (p) {
+    const can = DraftGeometry.canSlide(S, p.id);
+    if (can.ok) { drag = p.id; say('info', 'Тяните точку вдоль стены.'); }
+    else say('info', can.reason);
+    ev.preventDefault();
+  }
+});
+window.addEventListener('mouseup', () => { if (drag) { drag = null; render(); } });
+svg.addEventListener('click', ev => {
+  const raw = svgPoint(ev);
+  const pt = pointAt(raw);
+
+  if (S.closed) {
+    // режим расстановки: выбор точек участка / разрез стены
+    if (pt) {
+      if (selA === null) { selA = pt.id; selB = null; }
+      else if (pt.id === selA) { selA = null; selB = null; }
+      else { selB = pt.id; }
+      render(); return;
+    }
+    const w = wallAt(raw);
+    if (w) {
+      S = DraftGeometry.splitWall(S, w.i, w.x, w.y);
+      selA = selB = null;
+      say('info', 'Точка вставлена — стена разрезана на две. Теперь каждой части можно прибить свой размер.');
+      render(); return;
+    }
+    selA = selB = null; render(); return;
+  }
+
+  // рисование
+  if (S.points.length >= 3 && nearFirst(raw)) {
+    S = DraftGeometry.closeContour(S);
+    const cr = DraftGeometry.crossings(S);
+    say(cr.length ? 'bad' : 'ok', cr.length ? 'Контур замкнут, но он пересекает сам себя — двигайте точки, чтобы исправить.' : 'Контур замкнут! Теперь выберите две точки и прибейте размер.');
+    render(); return;
+  }
+  const p = snapPoint(raw);
+  S = DraftGeometry.addPoint(S, p.x, p.y);
+  say('info', 'Точка поставлена. Кликайте дальше или кликните в первую точку, чтобы замкнуть.');
+  render();
+});
+
+pinBtn.addEventListener('click', () => {
+  if (selA === null || selB === null) return;
+  const target = parseInt(lenInput.value, 10);
+  const res = DraftGeometry.tryLock(S, selA, selB, target);
+  if (res.ok) {
+    S = res.state;
+    lenInput.classList.remove('bad');
+    say('ok', `Размер прибит: замок «А${selA}–А${selB} = ${target}». Точка А${selA} стоит на месте, остальное подстроилось.`);
+  } else {
+    lenInput.classList.add('bad');
+    const c = res.error.conflicts && res.error.conflicts.length
+      ? ' Замки-конфликтники: ' + res.error.conflicts.map(s => `«${s}»`).join(', ') + '. Снимите один из замков и попробуйте снова.'
+      : '';
+    say('bad', res.error.reason + c);
+  }
+  render();
+});
+lenInput.addEventListener('input', () => lenInput.classList.remove('bad'));
+document.getElementById('sel-reset').addEventListener('click', () => { selA = selB = null; render(); });
+
+document.getElementById('example-btn').addEventListener('click', () => {
+  S = DraftGeometry.initial();
+  [[0, 0], [600, 0], [600, 350], [250, 350], [250, 600], [0, 600]].forEach(p => { S = DraftGeometry.addPoint(S, p[0], p[1]); });
+  S = DraftGeometry.closeContour(S);
+  selA = selB = null;
+  say('info', 'Г-образная комната загружена. Выберите две точки на одной стене и прибейте размер.');
+  render();
+});
+document.getElementById('reset-btn').addEventListener('click', () => {
+  S = DraftGeometry.initial(); selA = selB = null;
+  say('info', 'Начисто. Кликайте по полю — ставьте углы.');
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
