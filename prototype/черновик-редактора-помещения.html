@@ -387,6 +387,11 @@ const DraftGeometry = (() => {
   function unlockPartition(s, partId) {
     return { ...s, partitions: s.partitions.map(p => p.id === partId ? { ...p, len: null } : p) };
   }
+  function movePartitionEnd(s, partId, x, y) {
+    const pt = s.partitions.find(p => p.id === partId);
+    if (!pt || pt.len) return s; // прибитый простенок мышью не тянется
+    return { ...s, partitions: s.partitions.map(p => p.id === partId ? { ...p, x2: Math.round(x), y2: Math.round(y) } : p) };
+  }
   function removePartition(s, partId) {
     return { ...s, partitions: s.partitions.filter(p => p.id !== partId) };
   }
@@ -405,7 +410,7 @@ const DraftGeometry = (() => {
   }
 
   return { initial, addPoint, closeContour, splitWall, canSlide, slidePoint, chainInfo, tryLock, removeLock, crossings, wallLen, axisOf, idxOf,
-           addPartition, partLen, lockPartition, unlockPartition, removePartition, rebasePartitions };
+           addPartition, partLen, lockPartition, unlockPartition, movePartitionEnd, removePartition, rebasePartitions };
 })();
 </script>
 
@@ -515,6 +520,7 @@ function render() {
     }));
     const mx = X((from.x + pt.x2) / 2), my = Y((from.y + pt.y2) / 2);
     svg.appendChild(el('text', { x: mx + 6, y: my - 6, 'font-size': 13, fill: '#dc2626', 'font-weight': pt.len ? 700 : 400 }, 'П' + pt.id + ' · ' + len + (pt.len ? ' 🔒' : '')));
+    svg.appendChild(el('circle', { cx: X(pt.x2), cy: Y(pt.y2), r: 5, fill: pt.len ? '#fecaca' : '#ffffff', stroke: '#dc2626', 'stroke-width': 2, style: 'cursor:' + (pt.len ? 'not-allowed' : 'grab') }));
   }
   // предпросмотр растущего простенка
   if (partMode && pendingPart !== null && mouse) {
@@ -572,10 +578,10 @@ function render() {
   const selP = S.partitions.find(p => p.id === selPart);
   document.getElementById('part-row').style.display = selP ? 'flex' : 'none';
   if (selP) {
-    document.getElementById('part-info').textContent = 'Простенок П' + selP.id + ' растёт из точки А' + selP.fromPointId + ' и ездит вместе с ней при пересчёте размеров. Сейчас: ' + DraftGeometry.partLen(S, selP) + ' см.';
+    document.getElementById('part-info').textContent = 'Простенок П' + selP.id + ' растёт из точки А' + selP.fromPointId + ' и ездит вместе с ней. Свободный конец можно тянуть мышью' + (selP.len ? ' (сейчас прибит — снимите замок)' : '') + '. Сейчас: ' + DraftGeometry.partLen(S, selP) + ' см.';
     const inp = document.getElementById('part-len');
-    inp.value = DraftGeometry.partLen(S, selP); inp.disabled = !!selP.len;
-    document.getElementById('part-pin').disabled = !!selP.len;
+    inp.value = DraftGeometry.partLen(S, selP);
+    document.getElementById('part-pin').textContent = selP.len ? 'Перебить' : 'Прибить';
     document.getElementById('part-unlock').disabled = !selP.len;
   }
   for (const pt of S.partitions) {
@@ -638,18 +644,43 @@ function partitionAt(p) {
   }
   return null;
 }
+function partitionEndAt(p) {
+  for (const pt of S.partitions)
+    if ((X(p.x) - X(pt.x2)) ** 2 + (Y(p.y) - Y(pt.y2)) ** 2 < 14 * 14) return pt.id;
+  return null;
+}
 
 svg.addEventListener('mousemove', ev => {
   const p = svgPoint(ev); mouse = p;
-  if (drag) { S = DraftGeometry.slidePoint(S, drag, p.x, p.y); render(); return; }
+  if (drag) {
+    if (drag.type === 'point') { S = DraftGeometry.slidePoint(S, drag.id, p.x, p.y); render(); return; }
+    if (drag.type === 'part') {
+      const e = snapBox.checked
+        ? { x: Math.round(p.x / 25) * 25, y: Math.round(p.y / 25) * 25 }
+        : { x: Math.round(p.x), y: Math.round(p.y) };
+      S = DraftGeometry.movePartitionEnd(S, drag.id, e.x, e.y);
+      render(); return;
+    }
+  }
   if (!S.closed && S.points.length > 0) render();
 });
 svg.addEventListener('mouseleave', () => { mouse = null; render(); });
 svg.addEventListener('mousedown', ev => {
-  const p = pointAt(svgPoint(ev));
-  if (p) {
-    const can = DraftGeometry.canSlide(S, p.id);
-    if (can.ok) { drag = p.id; say('info', 'Тяните точку вдоль стены.'); }
+  const raw = svgPoint(ev);
+  // свободный конец простенка: тянем, если не прибит
+  const pe = partitionEndAt(raw);
+  if (pe !== null) {
+    const pt = S.partitions.find(q => q.id === pe);
+    if (pt.len) { say('info', 'Длина простенка прибита — перебейте её числом или снимите замок.'); return; }
+    drag = { type: 'part', id: pe };
+    selPart = pe; selA = selB = null;
+    say('info', 'Тяните свободный конец простенка.');
+    ev.preventDefault(); return;
+  }
+  const pt = pointAt(raw);
+  if (pt) {
+    const can = DraftGeometry.canSlide(S, pt.id);
+    if (can.ok) { drag = { type: 'point', id: pt.id }; say('info', 'Тяните точку вдоль стены.'); }
     else say('info', can.reason);
     ev.preventDefault();
   }
@@ -752,7 +783,7 @@ partModeBtn.addEventListener('click', () => {
 document.getElementById('part-pin').addEventListener('click', () => {
   if (selPart === null) return;
   const r = DraftGeometry.lockPartition(S, selPart, parseInt(document.getElementById('part-len').value, 10));
-  if (r.ok) { S = r.state; say('ok', 'Длина простенка прибита: при пересчёте размеров она сохранится.'); }
+  if (r.ok) { S = r.state; say('ok', 'Длина простенка прибита: при пересчёте размеров сохранится новая величина.'); }
   else say('bad', r.reason);
   render();
 });
