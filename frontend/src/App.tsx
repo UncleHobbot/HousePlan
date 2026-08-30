@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Floor, Project } from '@houseplan/shared';
 import { api, type ProjectSummary } from './api';
 import { PlanView } from './PlanView';
+import { RoomEditor } from './editor/RoomEditor';
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
@@ -85,6 +86,7 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
   const [error, setError] = useState('');
   const [activeFloor, setActiveFloor] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
 
   useEffect(() => {
     api
@@ -115,42 +117,29 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
         id,
         name: `${p.floors.length + 1}-й этаж`,
         ceilingHeightCm: 260,
-        shell: { contour: { points: [], thicknesses: {}, locks: [] }, openings: [] },
+        shell: { contour: { points: [], thicknesses: {}, locks: [], closed: false }, openings: [] },
         rooms: [],
       });
       setActiveFloor(id);
     });
   }
 
-  function addRoom(floor: Floor) {
+  function startDrawingRoom(floor: Floor) {
+    if (!project) return;
+    const id = (project.counters.room ?? 0) + 1;
     update((p) => {
       const f = p.floors.find((f) => f.id === floor.id)!;
-      const id = (p.counters.room ?? 0) + 1;
       p.counters.room = id;
-      const originX = 100 + f.rooms.length * 50;
-      const originY = 100 + f.rooms.length * 50;
-      const w = 400;
-      const h = 300;
-      const pts = [0, 1, 2, 3].map((k) => {
-        const pid = (p.counters.point ?? 0) + 1;
-        p.counters.point = pid;
-        return {
-          id: pid,
-          x: originX + (k === 1 || k === 2 ? w : 0),
-          y: originY + (k === 2 || k === 3 ? h : 0),
-        };
-      });
-      const thicknesses: Record<number, number> = {};
-      for (const pt of pts) thicknesses[pt.id] = 10;
       f.rooms.push({
         id,
         name: `Комната ${id}`,
-        contour: { points: pts, thicknesses, locks: [] },
+        contour: { points: [], thicknesses: {}, locks: [], closed: false },
         openings: [],
         zones: [],
         placements: [],
       });
     });
+    setEditingRoomId(id);
   }
 
   async function save() {
@@ -199,23 +188,54 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
         <button onClick={addFloor}>+ Этаж</button>
       </div>
       {floor ? (
-        <>
-          <div className="row">
-            <b>{floor.name}</b>
-            <span className="muted">потолок: {floor.ceilingHeightCm} см</span>
-            <button onClick={() => addRoom(floor)}>+ Помещение</button>
-          </div>
-          <PlanView floor={floor} />
-          <ul>
-            {floor.rooms.map((r) => (
-              <li key={r.id}>
-                {r.name} — {r.contour.points.length} углов, объектов: {r.placements.length}
-              </li>
-            ))}
-          </ul>
-        </>
+        editingRoomId !== null && floor.rooms.some((r) => r.id === editingRoomId) ? (
+          (() => {
+            const room = floor.rooms.find((r) => r.id === editingRoomId)!;
+            return (
+              <RoomEditor
+                roomName={room.name}
+                contour={room.contour}
+                onChangeContour={(c) =>
+                  update((p) => {
+                    const f = p.floors.find((f) => f.id === floor.id)!;
+                    const r = f.rooms.find((r) => r.id === editingRoomId)!;
+                    r.contour = c;
+                  })
+                }
+                onDone={() => setEditingRoomId(null)}
+              />
+            );
+          })()
+        ) : (
+          <>
+            <div className="row">
+              <b>{floor.name}</b>
+              <span className="muted">потолок: {floor.ceilingHeightCm} см</span>
+              <button onClick={() => startDrawingRoom(floor)}>+ Нарисовать помещение</button>
+            </div>
+            {floor.rooms.length === 0 ? (
+              <p className="muted">На этаже пока нет помещений. Нажмите «Нарисовать помещение».</p>
+            ) : (
+              <ul>
+                {floor.rooms.map((r) => (
+                  <li key={r.id}>
+                    <span className="row">
+                      {r.name} — {r.contour.closed ? `${r.contour.points.length} углов` : 'недорисовано'}
+                      {', объектов: '}
+                      {r.placements.length}
+                      <button onClick={() => setEditingRoomId(r.id)}>
+                        {r.contour.closed ? 'Редактировать' : 'Продолжить рисование'}
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <PlanView floor={floor} />
+          </>
+        )
       ) : (
-        <p>На этаже пусто. Добавьте этаж или помещение.</p>
+        <p>Добавьте этаж — и рисуйте.</p>
       )}
     </div>
   );

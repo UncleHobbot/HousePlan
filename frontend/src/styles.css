@@ -35,3 +35,15 @@ input {
   width: 100%; text-align: left; padding: 10px 14px;
 }
 .plan { background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; width: 100%; }
+.plan.bad { border-color: #b91c1c; }
+.banner { padding: 8px 12px; border-radius: 8px; font-size: 14px; }
+.banner.info { background: #e0f2fe; }
+.banner.ok { background: #dcfce7; }
+.banner.bad { background: #fee2e2; }
+.bad-text { color: #b91c1c; }
+.editor { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1 1 320px; }
+.card h2 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.4px; color: #64748b; }
+ul.locks { list-style: none; margin: 0; padding: 0; }
+ul.locks li { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px dashed #e2e8f0; gap: 8px; }
+input.bad, .plan.bad input { border-color: #b91c1c; background: #fef2f2; }

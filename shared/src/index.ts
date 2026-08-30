@@ -1,6 +1,8 @@
 // Модель данных HousePlan — зеркало docs/модель-данных.md.
 // Все длины — целые сантиметры. Осей стен нет: линии контуров — внутренние грани.
 
+export * from './geometry.js';
+
 /** Версия формата файла плана (внешний контракт — ADR 0005). */
 export const FORMAT_VERSION = 1;
 
@@ -30,6 +32,8 @@ export interface Contour {
   /** толщина стены, начинающейся в точке с этим идентификатором (рисунок, не размеры) */
   thicknesses: Record<number, Cm>;
   locks: SizeLock[];
+  /** контур замкнут (клик по первой точке); помещение существует только замкнутым */
+  closed: boolean;
 }
 
 export type OpeningKind = 'window' | 'entryDoor' | 'innerDoor';
@@ -217,7 +221,7 @@ export function defaultRoom(project: Project, id: number, name: string, originX:
   return {
     id,
     name,
-    contour: { points: pts, thicknesses, locks: [] },
+    contour: { points: pts, thicknesses, locks: [], closed: true },
     openings: [],
     zones: [],
     placements: [],
