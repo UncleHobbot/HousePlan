@@ -1,0 +1,15 @@
+{
+  "name": "houseplan",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build -w @houseplan/shared && npm run build -w @houseplan/backend && npm run build -w @houseplan/frontend",
+    "dev:backend": "npm run dev -w @houseplan/backend",
+    "dev:frontend": "npm run dev -w @houseplan/frontend",
+    "start": "npm run start -w @houseplan/backend"
+  }
+}
