@@ -1,40 +1,70 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Contour, Point } from '@houseplan/shared';
+import type { Contour, Floor, Point, Zone, ZoneKind } from '@houseplan/shared';
 import {
   canSlide,
   chainInfo,
   crossings,
   lockLabel,
   lockedWalls,
+  NO_CLEARANCE,
+  rebaseZones,
   slidePoint,
   tryLock,
+  ZONE_KIND_LABELS,
 } from '@houseplan/shared';
 
 const GRID = 25;
+const PARTITION_THICKNESS = 15;
+
+const ZONE_COLORS: Record<ZoneKind, string> = {
+  stairs: '#7c3aed',
+  builtInWardrobe: '#0d9488',
+  fireplace: '#ea580c',
+  decorativeWall: '#db2777',
+  partition: '#dc2626',
+  other: '#ca8a04',
+};
 
 interface Banner {
   kind: 'info' | 'ok' | 'bad';
   text: string;
 }
 
+interface ZoneDraft {
+  kind: ZoneKind;
+  /** точка контура-привязки (растёт из неё / лежит на опорной стене) */
+  anchorId: number;
+  /** вершины; первая совпадает с точкой привязки */
+  points: Point[];
+  /** направление опорной стены — для простенка */
+  wallDir: { x: number; y: number } | null;
+}
+
 /**
- * Редактор одного помещения: рисование контура на глаз, прибивание размеров,
- * разрез стен, скольжение точек. Поведение перенесено из подтверждённого
- * черновика (prototype/editor-draft).
+ * Редактор помещения: рисование контура на глаз, прибивание размеров,
+ * служебные зоны и простенки. Поведение перенесено из подтверждённого
+ * черновика (prototype/editor-draft) и решений задач карты.
  */
 export function RoomEditor({
   roomName,
   contour,
+  zones,
+  floors,
+  floorId,
   onChangeContour,
+  onChangeZones,
   onDone,
 }: {
   roomName: string;
   contour: Contour;
+  zones: Zone[];
+  floors: Floor[];
+  floorId: number;
   onChangeContour: (contour: Contour) => void;
+  onChangeZones: (zones: Zone[]) => void;
   onDone: () => void;
 }) {
   const points = contour.points;
-  const drawing = !contour.closed;
   const n = points.length;
 
   const [banner, setBanner] = useState<Banner | null>({ kind: 'info', text: 'Кликайте по полю — ставьте углы; клик в первую точку замыкает контур.' });
@@ -44,19 +74,38 @@ export function RoomEditor({
   const [mouse, setMouse] = useState<{ x: number; y: number } | null>(null);
   const [slideId, setSlideId] = useState<number | null>(null);
   const [inputBad, setInputBad] = useState(false);
+  const [inputValue, setInputValue] = useState('');
   const slideRef = useRef<number | null>(null);
   const maxPointId = useRef(Math.max(0, ...points.map((p) => p.id)));
   const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // зоны
+  const [zoneMode, setZoneMode] = useState<'none' | 'polygon' | 'partition'>('none');
+  const [zoneKind, setZoneKind] = useState<ZoneKind>('partition');
+  const [zoneDraft, setZoneDraft] = useState<ZoneDraft | null>(null);
+  const [zoneVertexDrag, setZoneVertexDrag] = useState<{ zoneId: number; pointId: number } | null>(null);
+  const zoneVertexDragRef = useRef<{ zoneId: number; pointId: number } | null>(null);
+  const maxZonePointId = useRef(
+    Math.max(0, ...zones.flatMap((z) => z.points.map((p) => p.id))),
+  );
 
   function say(kind: Banner['kind'], text: string) {
     setBanner({ kind, text });
   }
 
-  function setContour(contour: Contour) {
-    onChangeContour(contour);
+  /** Меняет контур и подтягивает привязанные зоны за сдвинувшимися точками. */
+  function mutateContour(f: (c: Contour) => Contour) {
+    const newContour = f(contour);
+    const rebased = rebaseZones(contour.points, newContour.points, zones);
+    onChangeContour(newContour);
+    onChangeZones(rebased);
   }
 
-  // ---------- преобразование координат (вписываем содержимое в поле) ----------
+  function updateZones(zones: Zone[]) {
+    onChangeZones(zones);
+  }
+
+  // ---------- преобразование координат ----------
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);
   const minX = Math.min(0, ...xs) - 60;
@@ -69,6 +118,13 @@ export function RoomEditor({
   const invX = (px: number) => px / k + minX;
   const invY = (py: number) => py / k + minY;
 
+  function centroid(): { x: number; y: number } {
+    return {
+      x: points.reduce((a, p) => a + p.x, 0) / Math.max(1, n),
+      y: points.reduce((a, p) => a + p.y, 0) / Math.max(1, n),
+    };
+  }
+
   function svgPoint(e: { clientX: number; clientY: number }): { x: number; y: number } {
     const rect = svgRef.current!.getBoundingClientRect();
     return {
@@ -80,6 +136,17 @@ export function RoomEditor({
   function pointAt(raw: { x: number; y: number }): Point | null {
     for (const p of points) {
       if ((X(raw.x) - X(p.x)) ** 2 + (Y(raw.y) - Y(p.y)) ** 2 < 14 * 14) return p;
+    }
+    return null;
+  }
+
+  function zoneVertexAt(raw: { x: number; y: number }): { zoneId: number; pointId: number } | null {
+    for (const z of zones) {
+      for (const p of z.points) {
+        if ((X(raw.x) - X(p.x)) ** 2 + (Y(raw.y) - Y(p.y)) ** 2 < 10 * 10) {
+          return { zoneId: z.id, pointId: p.id };
+        }
+      }
     }
     return null;
   }
@@ -122,7 +189,19 @@ export function RoomEditor({
     const raw = svgPoint(e);
     setMouse(raw);
     if (slideRef.current !== null) {
-      setContour(slidePoint(contour, slideRef.current, raw.x, raw.y));
+      setContourQuiet(slidePoint(contour, slideRef.current, raw.x, raw.y));
+      return;
+    }
+    if (zoneVertexDragRef.current) {
+      const { zoneId, pointId } = zoneVertexDragRef.current;
+      const p = snapPoint(raw);
+      updateZones(
+        zones.map((z) =>
+          z.id === zoneId
+            ? { ...z, points: z.points.map((vp) => (vp.id === pointId ? { ...vp, x: p.x, y: p.y } : vp)) }
+            : z,
+        ),
+      );
     }
   }
 
@@ -132,6 +211,10 @@ export function RoomEditor({
         slideRef.current = null;
         setSlideId(null);
       }
+      if (zoneVertexDragRef.current) {
+        zoneVertexDragRef.current = null;
+        setZoneVertexDrag(null);
+      }
     }
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
@@ -139,7 +222,7 @@ export function RoomEditor({
 
   function onMouseDown(e: React.MouseEvent) {
     const raw = svgPoint(e);
-    if (contour.closed) {
+    if (contour.closed && zoneMode === 'none') {
       const p = pointAt(raw);
       if (p) {
         const can = canSlide(contour, p.id);
@@ -155,9 +238,157 @@ export function RoomEditor({
     }
   }
 
+  /** Привязка: клик по стене разрезает её (точка становится привязкой), клик по точке берёт её. */
+  function anchorFromClick(raw: { x: number; y: number }): { pointId: number; coords: { x: number; y: number } } | null {
+    const pt = pointAt(raw);
+    if (pt) return { pointId: pt.id, coords: { ...pt } };
+    const wall = wallAt(raw);
+    if (wall !== null) {
+      const a = points[wall], b = points[(wall + 1) % n];
+      // проекция клика на стену
+      const vx = b.x - a.x, vy = b.y - a.y;
+      const l2 = vx * vx + vy * vy || 1;
+      let t = ((raw.x - a.x) * vx + (raw.y - a.y) * vy) / l2;
+      t = Math.max(0.05, Math.min(0.95, t));
+      const mid = { x: Math.round(a.x + vx * t), y: Math.round(a.y + vy * t) };
+      const newId = ++maxPointId.current;
+      const pts = [...points];
+      pts.splice(wall + 1, 0, { id: newId, ...mid });
+      const thicknesses = { ...contour.thicknesses, [newId]: contour.thicknesses[a.id] ?? 10 };
+      onChangeContour({ ...contour, points: pts, thicknesses });
+      return { pointId: newId, coords: mid };
+    }
+    return null;
+  }
+
+  function wallDirAt(pointId: number): { x: number; y: number } {
+    const i = points.findIndex((p) => p.id === pointId);
+    if (i < 0) return { x: 1, y: 0 };
+    const a = points[i], b = points[(i + 1) % n];
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+  }
+
+  function zoneClick(raw: { x: number; y: number }) {
+    const centroidPt = centroid();
+
+    if (zoneMode === 'partition') {
+      if (!zoneDraft) {
+        const anchor = anchorFromClick(raw);
+        if (!anchor) {
+          say('info', 'Кликните по стене — простенок вырастет из неё.');
+          return;
+        }
+        setZoneDraft({
+          kind: zoneKind === 'decorativeWall' ? 'decorativeWall' : 'partition',
+          anchorId: anchor.pointId,
+          points: [{ id: ++maxZonePointId.current, x: anchor.coords.x, y: anchor.coords.y }],
+          wallDir: wallDirAt(anchor.pointId),
+        });
+        say('info', 'Теперь кликните второй конец простенка.');
+        return;
+      }
+      // второй клик: прямоугольник от точки привязки вдоль стены, толщиной внутрь
+      const anchor = zoneDraft.points[0];
+      const u = zoneDraft.wallDir;
+      if (!u) return;
+      let ux = u.x, uy = u.y;
+      let len = (raw.x - anchor.x) * ux + (raw.y - anchor.y) * uy;
+      if (Math.abs(len) < 20) {
+        say('bad', 'Простенок слишком короткий.');
+        return;
+      }
+      if (len < 0) {
+        ux = -ux; uy = -uy; len = -len;
+      }
+      let nx = -uy, ny = ux;
+      if (nx * (centroidPt.x - anchor.x) + ny * (centroidPt.y - anchor.y) < 0) {
+        nx = -nx; ny = -ny;
+      }
+      const cornerIds = [1, 2, 3, 4].map(() => ++maxZonePointId.current);
+      const corners: Point[] = [
+        { id: cornerIds[0], x: anchor.x, y: anchor.y },
+        { id: cornerIds[1], x: Math.round(anchor.x + ux * len), y: Math.round(anchor.y + uy * len) },
+        { id: cornerIds[2], x: Math.round(anchor.x + ux * len + nx * PARTITION_THICKNESS), y: Math.round(anchor.y + uy * len + ny * PARTITION_THICKNESS) },
+        { id: cornerIds[3], x: Math.round(anchor.x + nx * PARTITION_THICKNESS), y: Math.round(anchor.y + ny * PARTITION_THICKNESS) },
+      ];
+      const zone: Zone = {
+        id: ++maxZonePointId.current,
+        kind: zoneKind === 'decorativeWall' ? 'decorativeWall' : 'partition',
+        name: ZONE_KIND_LABELS[zoneKind],
+        points: corners,
+        fromPointId: zoneDraft.anchorId,
+        clearances: { ...NO_CLEARANCE },
+        attributes: [],
+      };
+      updateZones([...zones, zone]);
+      setZoneDraft(null);
+      setZoneMode('none');
+      say('ok', `${zone.name} готов: приклеен к своей точке и поедет вместе с ней при пересчёте размеров.`);
+      return;
+    }
+
+    // многоугольная зона
+    if (!zoneDraft) {
+      const anchor = anchorFromClick(raw);
+      if (!anchor) {
+        say('info', 'Кликните по стене (зона приляжет к ней) или по точке контура.');
+        return;
+      }
+      setZoneDraft({
+        kind: zoneKind,
+        anchorId: anchor.pointId,
+        points: [{ id: ++maxZonePointId.current, x: anchor.coords.x, y: anchor.coords.y }],
+        wallDir: null,
+      });
+      say('info', 'Кликайте вершины зоны; клик рядом с первой точкой замыкает.');
+      return;
+    }
+    if (zoneDraft.points.length >= 3) {
+      const first = zoneDraft.points[0];
+      if ((X(raw.x) - X(first.x)) ** 2 + (Y(raw.y) - Y(first.y)) ** 2 < 14 * 14) {
+        closeZoneDraft();
+        return;
+      }
+    }
+    const p = snapPoint(raw);
+    setZoneDraft({ ...zoneDraft, points: [...zoneDraft.points, { id: ++maxZonePointId.current, ...p }] });
+  }
+
+  function closeZoneDraft() {
+    if (!zoneDraft || zoneDraft.points.length < 3) {
+      say('bad', 'В зоне меньше трёх вершин.');
+      return;
+    }
+    const zone: Zone = {
+      id: ++maxZonePointId.current,
+      kind: zoneDraft.kind,
+      name: ZONE_KIND_LABELS[zoneDraft.kind],
+      points: zoneDraft.points,
+      supportWallPointId: zoneDraft.anchorId,
+      clearances: { ...NO_CLEARANCE },
+      attributes: [],
+    };
+    updateZones([...zones, zone]);
+    setZoneDraft(null);
+    setZoneMode('none');
+    say('ok', `${zone.name} готова: привязана к своей точке стены и поедет вместе с ней при пересчёте размеров.`);
+  }
+
+  function cancelZoneDraft() {
+    setZoneDraft(null);
+    setZoneMode('none');
+    say('info', 'Рисование зоны отменено.');
+  }
+
   function onClick(e: React.MouseEvent) {
     const raw = svgPoint(e);
     const pt = pointAt(raw);
+
+    if (contour.closed && zoneMode !== 'none') {
+      zoneClick(raw);
+      return;
+    }
 
     if (contour.closed) {
       if (pt) {
@@ -173,6 +404,12 @@ export function RoomEditor({
         }
         return;
       }
+      const zv = zoneVertexAt(raw);
+      if (zv) {
+        zoneVertexDragRef.current = zv;
+        setZoneVertexDrag(zv);
+        return;
+      }
       const wall = wallAt(raw);
       if (wall !== null) {
         const a = points[wall];
@@ -180,9 +417,9 @@ export function RoomEditor({
         const mid = { x: Math.round((a.x + b.x) / 2), y: Math.round((a.y + b.y) / 2) };
         const newId = ++maxPointId.current;
         const pts = [...points];
-        pts.splice(wall + 1, 0, { id: newId, x: mid.x, y: mid.y });
+        pts.splice(wall + 1, 0, { id: newId, ...mid });
         const thicknesses = { ...contour.thicknesses, [newId]: contour.thicknesses[a.id] ?? 10 };
-        setContour({ ...contour, points: pts, thicknesses });
+        setContourQuiet({ ...contour, points: pts, thicknesses });
         setSelA(null);
         setSelB(null);
         say('info', 'Стена разрезана на две — каждой части можно прибить свой размер.');
@@ -195,7 +432,7 @@ export function RoomEditor({
 
     // рисование
     if (points.length >= 3 && nearFirst(raw)) {
-      setContour({ ...contour, closed: true });
+      setContourQuiet({ ...contour, closed: true });
       const bad = crossings(points).length > 0;
       say(
         bad ? 'bad' : 'ok',
@@ -207,11 +444,16 @@ export function RoomEditor({
     }
     const p = snapPoint(raw);
     const id = ++maxPointId.current;
-    setContour({ ...contour, points: [...points, { id, x: p.x, y: p.y }] });
+    setContourQuiet({ ...contour, points: [...points, { id, ...p }] });
     say('info', 'Точка поставлена. Клик в первую точку замыкает контур.');
   }
 
-  // ---------- прибивание ----------
+  /** Изменение контура без каскада по зонам (рисование, разрез, скольжение). */
+  function setContourQuiet(c: Contour) {
+    onChangeContour(c);
+  }
+
+  // ---------- приборная панель ----------
   const selInfo = (() => {
     if (selA !== null && selB !== null) {
       const info = chainInfo(contour, selA, selB);
@@ -219,7 +461,6 @@ export function RoomEditor({
         return {
           ok: true as const,
           text: `Участок А${selA} → А${selB}: сейчас ${info.length} см. Точка А${selA} останется на месте.`,
-          length: info.length,
         };
       }
       return { ok: false as const, text: info.reason };
@@ -228,12 +469,19 @@ export function RoomEditor({
     return { ok: false as const, text: 'Выберите две точки контура: сначала та, что останется на месте (А), затем Б.' };
   })();
 
+  useEffect(() => {
+    if (selA !== null && selB !== null) {
+      const info = chainInfo(contour, selA, selB);
+      if (info.ok) setInputValue(String(info.length));
+    }
+  }, [selA, selB, contour]);
+
   function pin() {
     if (selA === null || selB === null) return;
     const target = parseInt(inputValue, 10);
     const res = tryLock(contour, selA, selB, target);
     if (res.ok) {
-      setContour(res.contour);
+      mutateContour(() => res.contour);
       setInputBad(false);
       say('ok', `Размер прибит: ${res.label}. Точка А${selA} на месте, остальное подстроилось.`);
     } else {
@@ -242,15 +490,6 @@ export function RoomEditor({
       say('bad', res.reason + conflicts);
     }
   }
-
-  const [inputValue, setInputValue] = useState('');
-
-  useEffect(() => {
-    if (selA !== null && selB !== null) {
-      const info = chainInfo(contour, selA, selB);
-      if (info.ok) setInputValue(String(info.length));
-    }
-  }, [selA, selB, contour]);
 
   const crossPairs = contour.closed ? crossings(points) : [];
   const crossSet = new Set(crossPairs.flat());
@@ -285,6 +524,7 @@ export function RoomEditor({
           onMouseLeave={() => setMouse(null)}
           onMouseDown={onMouseDown}
           onClick={onClick}
+          style={{ cursor: zoneMode !== 'none' ? 'crosshair' : 'default' }}
         >
           {snap &&
             Array.from({ length: Math.ceil(960 / (GRID * k)) + 1 }, (_, gx) => (
@@ -294,6 +534,54 @@ export function RoomEditor({
             Array.from({ length: Math.ceil(560 / (GRID * k)) + 1 }, (_, gy) => (
               <line key={'h' + gy} x1={0} y1={gy * GRID * k - ((minY * k) % (GRID * k))} x2={960} y2={gy * GRID * k - ((minY * k) % (GRID * k))} stroke="#eef2f7" />
             ))}
+
+          {/* зоны */}
+          {zones.map((z) => {
+            const color = ZONE_COLORS[z.kind];
+            const d = z.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${X(p.x)} ${Y(p.y)}`).join(' ') + ' Z';
+            const cx = z.points.reduce((a, p) => a + p.x, 0) / z.points.length;
+            const cy = z.points.reduce((a, p) => a + p.y, 0) / z.points.length;
+            return (
+              <g key={z.id}>
+                <path d={d} fill={color} fillOpacity={0.3} stroke={color} strokeWidth={2} />
+                <text x={X(cx) + 4} y={Y(cy) - 4} fontSize={12} fill={color} fontWeight={700}>
+                  {z.name}
+                  {z.spansFloors ? ' ⭥' : ''}
+                </text>
+                {z.points.map((p) => (
+                  <circle
+                    key={p.id}
+                    cx={X(p.x)}
+                    cy={Y(p.y)}
+                    r={4}
+                    fill="#fff"
+                    stroke={color}
+                    strokeWidth={2}
+                    style={{ cursor: 'grab' }}
+                  />
+                ))}
+              </g>
+            );
+          })}
+
+          {/* черновик зоны */}
+          {zoneDraft && (
+            <g>
+              {zoneDraft.points.map((p, i) => (
+                <circle key={p.id} cx={X(p.x)} cy={Y(p.y)} r={4} fill="#fff" stroke="#0e7490" strokeWidth={2} />
+              ))}
+              {mouse && zoneDraft.points.length > 0 && (
+                <line
+                  x1={X(zoneDraft.points[zoneDraft.points.length - 1].x)}
+                  y1={Y(zoneDraft.points[zoneDraft.points.length - 1].y)}
+                  x2={X(mouse.x)}
+                  y2={Y(mouse.y)}
+                  stroke="#0e7490"
+                  strokeDasharray="4 5"
+                />
+              )}
+            </g>
+          )}
 
           {/* стены: полосы толщины + линии */}
           {contour.closed &&
@@ -366,7 +654,7 @@ export function RoomEditor({
             </>
           )}
 
-          {/* точки */}
+          {/* точки контура */}
           {points.map((p) => {
             const slide = canSlide(contour, p.id).ok;
             const fill = p.id === selA ? '#16a34a' : p.id === selB ? '#2563eb' : slide ? '#ffffff' : '#e2e8f0';
@@ -385,7 +673,7 @@ export function RoomEditor({
       <div className="row">
         <div className="card grow">
           <h2>Прибить размер</h2>
-          <p className="muted" id="sel-info">{selInfo.ok ? selInfo.text : selInfo.text}</p>
+          <p className="muted">{selInfo.text}</p>
           <div className="row">
             <input
               type="number"
@@ -415,7 +703,7 @@ export function RoomEditor({
                   <span>{lockLabel(l)}</span>
                   <button
                     onClick={() => {
-                      setContour({ ...contour, locks: contour.locks.filter((x) => x.aId !== l.aId || x.bId !== l.bId) });
+                      setContourQuiet({ ...contour, locks: contour.locks.filter((x) => x.aId !== l.aId || x.bId !== l.bId) });
                       say('info', `Замок «А${l.aId}–А${l.bId} = ${l.length}» снят.`);
                     }}
                   >
@@ -424,6 +712,87 @@ export function RoomEditor({
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+        <div className="card grow">
+          <h2>Служебные зоны</h2>
+          {zones.length === 0 && zoneMode === 'none' && zoneDraft === null ? (
+            <p className="muted">Зон нет. Выберите тип и нарисуйте.</p>
+          ) : null}
+          <ul className="locks">
+            {zones.map((z) => (
+              <li key={z.id}>
+                <span>
+                  {z.name} ({ZONE_KIND_LABELS[z.kind]})
+                  {z.spansFloors
+                    ? ` · сквозная: ${floors.find((f) => f.id === z.spansFloors!.fromFloorId)?.name ?? '?'}…${floors.find((f) => f.id === z.spansFloors!.toFloorId)?.name ?? '?'}`
+                    : ''}
+                </span>
+                <button
+                  onClick={() => {
+                    updateZones(zones.filter((x) => x.id !== z.id));
+                    say('info', 'Зона удалена.');
+                  }}
+                >
+                  удалить
+                </button>
+              </li>
+            ))}
+          </ul>
+          {zoneMode === 'none' && zoneDraft === null && (
+            <div className="row">
+              <select value={zoneKind} onChange={(e) => setZoneKind(e.target.value as ZoneKind)}>
+                {Object.entries(ZONE_KIND_LABELS).map(([k, label]) => (
+                  <option key={k} value={k}>{label}</option>
+                ))}
+              </select>
+              <button onClick={() => { setZoneMode('polygon'); say('info', 'Кликните по стене или точке контура — зона приляжет к ней.'); }}>
+                + Зона
+              </button>
+              <button onClick={() => { setZoneMode('partition'); say('info', 'Кликните по стене — простенок вырастет из неё.'); }}>
+                + Простенок
+              </button>
+            </div>
+          )}
+          {zoneMode !== 'none' && zoneDraft !== null && (
+            <div className="row">
+              {zoneMode === 'polygon' && (
+                <button className="primary" onClick={closeZoneDraft} disabled={zoneDraft.points.length < 3}>
+                  Замкнуть
+                </button>
+              )}
+              <button onClick={cancelZoneDraft}>Отмена</button>
+            </div>
+          )}
+          {zones.some((z) => z.kind === 'stairs') && (
+            <div>
+              {zones.filter((z) => z.kind === 'stairs').map((z) => (
+                <div className="row" key={z.id}>
+                  <span className="muted">{z.name}: сквозная</span>
+                  <select
+                    value={z.spansFloors?.fromFloorId ?? ''}
+                    onChange={(e) => {
+                      const from = Number(e.target.value);
+                      updateZones(zones.map((x) => (x.id === z.id ? { ...x, spansFloors: { fromFloorId: from, toFloorId: x.spansFloors?.toFloorId ?? from } } : x)));
+                    }}
+                  >
+                    <option value="">— нет —</option>
+                    {floors.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                  </select>
+                  …
+                  <select
+                    value={z.spansFloors?.toFloorId ?? ''}
+                    onChange={(e) => {
+                      const to = Number(e.target.value);
+                      updateZones(zones.map((x) => (x.id === z.id ? { ...x, spansFloors: { fromFloorId: x.spansFloors?.fromFloorId ?? to, toFloorId: to } } : x)));
+                    }}
+                    disabled={!z.spansFloors}
+                  >
+                    {floors.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </div>

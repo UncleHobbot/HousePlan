@@ -195,11 +195,21 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
               <RoomEditor
                 roomName={room.name}
                 contour={room.contour}
+                zones={room.zones}
+                floors={project.floors}
+                floorId={floor.id}
                 onChangeContour={(c) =>
                   update((p) => {
                     const f = p.floors.find((f) => f.id === floor.id)!;
                     const r = f.rooms.find((r) => r.id === editingRoomId)!;
                     r.contour = c;
+                  })
+                }
+                onChangeZones={(z) =>
+                  update((p) => {
+                    const f = p.floors.find((f) => f.id === floor.id)!;
+                    const r = f.rooms.find((r) => r.id === editingRoomId)!;
+                    r.zones = z;
                   })
                 }
                 onDone={() => setEditingRoomId(null)}
