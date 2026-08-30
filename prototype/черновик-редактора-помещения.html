@@ -73,6 +73,18 @@
     </div>
 
     <div class="card">
+      <h2>Простенки</h2>
+      <div id="part-info" class="muted">Ответвление от стены. Включите режим ниже, кликните по стене (или по точке контура) — а потом укажите, куда простенок заканчивается.</div>
+      <div class="row" id="part-row" style="display:none">
+        <input type="number" id="part-len" min="10" step="1"> см
+        <button class="primary" id="part-pin">Прибить</button>
+        <button id="part-unlock">Снять замок</button>
+        <button id="part-del" title="Удалить простенок">Удалить</button>
+      </div>
+      <ul class="locks" id="parts-list"></ul>
+    </div>
+
+    <div class="card">
       <h2>Замки</h2>
       <ul class="locks" id="locks-list"></ul>
       <div class="hint" id="locks-empty">Пока ни один размер не прибит.</div>
@@ -82,6 +94,9 @@
       <h2>Настройки и действия</h2>
       <div class="row">
         <label><input type="checkbox" id="snap" checked> прилипание (сетка 25 см и прямые углы)</label>
+      </div>
+      <div class="row">
+        <button id="part-mode">Режим простенка: выкл</button>
       </div>
       <div class="row">
         <button id="example-btn">Загрузить Г-образную комнату</button>
@@ -124,7 +139,8 @@
 
 <footer>
   Клик по пустому полю — точка · клик по первой точке — замкнуть контур · клик по стене — разрезать стену точкой ·
-  белую точку на прямой стене можно тянуть вдоль стены · зелёная точка — А (неподвижна), синяя — Б.
+  белую точку на прямой стене можно тянуть вдоль стены · зелёная точка — А (неподвижна), синяя — Б ·
+  в режиме простенка: клик по стене или точке — начало, второй клик — конец простенка.
 </footer>
 
 <script>
@@ -137,7 +153,7 @@
 const DraftGeometry = (() => {
   const MIN = 10; // минимальная длина стены, см
 
-  const initial = () => ({ points: [], nextPointId: 1, nextLockId: 1, locks: [], closed: false });
+  const initial = () => ({ points: [], nextPointId: 1, nextLockId: 1, locks: [], closed: false, partitions: [], nextPartitionId: 1 });
 
   function dist2(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return dx * dx + dy * dy; }
   function idxOf(s, id) { return s.points.findIndex(p => p.id === id); }
@@ -205,7 +221,7 @@ const DraftGeometry = (() => {
       ny = Math.max(lo, Math.min(hi, ny));
     }
     const pts = s.points.map(p => p.id === pointId ? { ...p, x: nx, y: ny } : p);
-    return { ...s, points: pts };
+    return rebasePartitions(s, { ...s, points: pts });
   }
 
   // Пересекает ли контур сам себя (только для замкнутого); возвращает пары номеров стен
@@ -342,12 +358,54 @@ const DraftGeometry = (() => {
       return { ok: false, error: { reason: 'Контур не сошёлся — это ошибка черновика, пожалуйста, сообщите, какие размеры вводили.' } };
 
     const lock = { id: s.nextLockId, aId, bId, len: target, label: `А${s.points[aIdx].id}–А${s.points[idxOf(s, bId)].id} = ${target}` };
-    return { ok: true, state: { ...s, points: pts, locks: [...s.locks, { ...lock }] , nextLockId: s.nextLockId + 1 } };
+    return { ok: true, state: rebasePartitions(s, { ...s, points: pts, locks: [...s.locks, { ...lock }] , nextLockId: s.nextLockId + 1 }) };
   }
 
   function removeLock(s, lockId) { return { ...s, locks: s.locks.filter(l => l.id !== lockId) }; }
 
-  return { initial, addPoint, closeContour, splitWall, canSlide, slidePoint, chainInfo, tryLock, removeLock, crossings, wallLen, axisOf, idxOf };
+  /* ---- Простенки: ответвления от стены ---- */
+
+  function addPartition(s, fromPointId, x2, y2) {
+    const p = { id: s.nextPartitionId, fromPointId, x2: Math.round(x2), y2: Math.round(y2), len: null };
+    return { ...s, partitions: [...s.partitions, p], nextPartitionId: s.nextPartitionId + 1 };
+  }
+  function partLen(s, pt) {
+    const from = s.points.find(p => p.id === pt.fromPointId);
+    return Math.round(Math.hypot(pt.x2 - from.x, pt.y2 - from.y));
+  }
+  function lockPartition(s, partId, len) {
+    const pt = s.partitions.find(p => p.id === partId);
+    const from = s.points.find(p => p.id === pt.fromPointId);
+    len = Math.round(len);
+    if (!(len >= MIN)) return { ok: false, reason: 'Длина должна быть целым числом сантиметров, не меньше ' + MIN + '.' };
+    const cur = Math.hypot(pt.x2 - from.x, pt.y2 - from.y);
+    if (cur < 1) return { ok: false, reason: 'Простенок слишком короткий.' };
+    const k = len / cur;
+    return { ok: true, state: { ...s, partitions: s.partitions.map(p =>
+      p.id === partId ? { ...p, x2: Math.round(from.x + (p.x2 - from.x) * k), y2: Math.round(from.y + (p.y2 - from.y) * k), len } : p) } };
+  }
+  function unlockPartition(s, partId) {
+    return { ...s, partitions: s.partitions.map(p => p.id === partId ? { ...p, len: null } : p) };
+  }
+  function removePartition(s, partId) {
+    return { ...s, partitions: s.partitions.filter(p => p.id !== partId) };
+  }
+  // Простенок жёстко приклеен к своей точке: куда она — туда и свободный конец
+  function rebasePartitions(oldS, newS) {
+    const moved = [];
+    for (const np of newS.points) {
+      const op = oldS.points.find(p => p.id === np.id);
+      if (op && (op.x !== np.x || op.y !== np.y)) moved.push({ id: np.id, dx: np.x - op.x, dy: np.y - op.y });
+    }
+    if (!moved.length) return newS;
+    return { ...newS, partitions: newS.partitions.map(pt => {
+      const m = moved.find(mm => mm.id === pt.fromPointId);
+      return m ? { ...pt, x2: pt.x2 + m.dx, y2: pt.y2 + m.dy } : pt;
+    }) };
+  }
+
+  return { initial, addPoint, closeContour, splitWall, canSlide, slidePoint, chainInfo, tryLock, removeLock, crossings, wallLen, axisOf, idxOf,
+           addPartition, partLen, lockPartition, unlockPartition, removePartition, rebasePartitions };
 })();
 </script>
 
@@ -367,6 +425,9 @@ let S = DraftGeometry.initial();
 let selA = null, selB = null;      // выбранные точки для участка
 let drag = null;                    // {id}
 let mouse = null;                   // текущая позиция мыши в см
+let partMode = false;               // режим рисования простенка
+let pendingPart = null;             // точка, из которой растёт простенок (ждём второй клик)
+let selPart = null;                 // выбранный простенок
 
 const NS = 'http://www.w3.org/2000/svg';
 function el(tag, attrs, text) {
@@ -442,6 +503,24 @@ function render() {
       svg.appendChild(el('circle', { cx: X(S.points[0].x), cy: Y(S.points[0].y), r: near ? 12 : 7, fill: 'none', stroke: near ? '#0e7490' : '#94a3b8', 'stroke-width': 2 }));
     }
   }
+  // простенки
+  for (const pt of S.partitions) {
+    const from = S.points.find(p => p.id === pt.fromPointId);
+    if (!from) continue;
+    const isSel = pt.id === selPart;
+    const len = DraftGeometry.partLen(S, pt);
+    svg.appendChild(el('line', {
+      x1: X(from.x), y1: Y(from.y), x2: X(pt.x2), y2: Y(pt.y2),
+      stroke: isSel ? '#7f1d1d' : '#dc2626', 'stroke-width': isSel ? 5 : 3, 'stroke-linecap': 'round'
+    }));
+    const mx = X((from.x + pt.x2) / 2), my = Y((from.y + pt.y2) / 2);
+    svg.appendChild(el('text', { x: mx + 6, y: my - 6, 'font-size': 13, fill: '#dc2626', 'font-weight': pt.len ? 700 : 400 }, 'П' + pt.id + ' · ' + len + (pt.len ? ' 🔒' : '')));
+  }
+  // предпросмотр растущего простенка
+  if (partMode && pendingPart !== null && mouse) {
+    const from = S.points.find(p => p.id === pendingPart);
+    if (from) svg.appendChild(el('line', { x1: X(from.x), y1: Y(from.y), x2: X(mouse.x), y2: Y(mouse.y), stroke: '#dc2626', 'stroke-dasharray': '4 5' }));
+  }
   // точки
   for (const p of S.points) {
     const slide = DraftGeometry.canSlide(S, p.id).ok;
@@ -486,6 +565,26 @@ function render() {
     const btn = document.createElement('button'); btn.textContent = 'снять'; btn.onclick = () => { S = DraftGeometry.removeLock(S, l.id); say('info', `Замок «${l.label}» снят — участок снова свободен.`); render(); };
     li.append(span, btn); locksList.appendChild(li);
   }
+
+  // простенки: панель
+  const partsList = document.getElementById('parts-list');
+  partsList.innerHTML = '';
+  const selP = S.partitions.find(p => p.id === selPart);
+  document.getElementById('part-row').style.display = selP ? 'flex' : 'none';
+  if (selP) {
+    document.getElementById('part-info').textContent = 'Простенок П' + selP.id + ' растёт из точки А' + selP.fromPointId + ' и ездит вместе с ней при пересчёте размеров. Сейчас: ' + DraftGeometry.partLen(S, selP) + ' см.';
+    const inp = document.getElementById('part-len');
+    inp.value = DraftGeometry.partLen(S, selP); inp.disabled = !!selP.len;
+    document.getElementById('part-pin').disabled = !!selP.len;
+    document.getElementById('part-unlock').disabled = !selP.len;
+  }
+  for (const pt of S.partitions) {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = 'П' + pt.id + ' · ' + DraftGeometry.partLen(S, pt) + ' см' + (pt.len ? ' 🔒' : '') + ' · из А' + pt.fromPointId;
+    li.appendChild(span);
+    partsList.appendChild(li);
+  }
 }
 function idNum(id) { return id; }
 
@@ -525,6 +624,20 @@ function pointAt(p) {
   for (const q of S.points) if ((X(p.x) - X(q.x)) ** 2 + (Y(p.y) - Y(q.y)) ** 2 < 14 ** 2) return q;
   return null;
 }
+function partitionAt(p) {
+  for (const pt of S.partitions) {
+    const from = S.points.find(q => q.id === pt.fromPointId);
+    if (!from) continue;
+    const ax = X(from.x), ay = Y(from.y), vx = X(pt.x2) - ax, vy = Y(pt.y2) - ay;
+    const wx = X(p.x) - ax, wy = Y(p.y) - ay;
+    const L2 = vx * vx + vy * vy;
+    let t = L2 ? (wx * vx + wy * vy) / L2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const dx = wx - t * vx, dy = wy - t * vy;
+    if (dx * dx + dy * dy < 12 * 12) return pt.id;
+  }
+  return null;
+}
 
 svg.addEventListener('mousemove', ev => {
   const p = svgPoint(ev); mouse = p;
@@ -547,13 +660,43 @@ svg.addEventListener('click', ev => {
   const pt = pointAt(raw);
 
   if (S.closed) {
-    // режим расстановки: выбор точек участка / разрез стены
+    // режим простенка: два клика — начало и конец
+    if (partMode) {
+      if (pendingPart === null) {
+        if (pt) { pendingPart = pt.id; say('info', 'Теперь кликните, где простенок закончится.'); render(); return; }
+        const w = wallAt(raw);
+        if (w) {
+          const newId = S.nextPointId;
+          S = DraftGeometry.splitWall(S, w.i, w.x, w.y);
+          pendingPart = newId;
+          say('info', 'Стена разрезана — простенок растёт из новой точки. Кликните, где он закончится.');
+          render(); return;
+        }
+        say('info', 'Кликните по стене (простенок вырастет из неё) или по точке контура.'); render(); return;
+      }
+      const from = S.points.find(p => p.id === pendingPart);
+      let end = snapBox.checked
+        ? { x: Math.round(raw.x / 25) * 25, y: Math.round(raw.y / 25) * 25 }
+        : { x: Math.round(raw.x), y: Math.round(raw.y) };
+      if (Math.abs(end.x - from.x) < 45) end.x = from.x;
+      else if (Math.abs(end.y - from.y) < 45) end.y = from.y;
+      if (Math.hypot(end.x - from.x, end.y - from.y) < 10) { say('bad', 'Простенок слишком короткий.'); render(); return; }
+      S = DraftGeometry.addPartition(S, pendingPart, end.x, end.y);
+      selPart = S.nextPartitionId - 1;
+      pendingPart = null;
+      say('ok', 'Простенок готов: он приклеен к своей точке и поедет вместе с ней при пересчёте размеров. Длину можно прибить замком — выберите простенок кликом.');
+      render(); return;
+    }
+    // обычный режим: выбор точек участка / выбор простенка / разрез стены
     if (pt) {
+      selPart = null;
       if (selA === null) { selA = pt.id; selB = null; }
       else if (pt.id === selA) { selA = null; selB = null; }
       else { selB = pt.id; }
       render(); return;
     }
+    const pid = partitionAt(raw);
+    if (pid !== null) { selA = selB = null; selPart = pid; render(); return; }
     const w = wallAt(raw);
     if (w) {
       S = DraftGeometry.splitWall(S, w.i, w.x, w.y);
@@ -561,7 +704,7 @@ svg.addEventListener('click', ev => {
       say('info', 'Точка вставлена — стена разрезана на две. Теперь каждой части можно прибить свой размер.');
       render(); return;
     }
-    selA = selB = null; render(); return;
+    selA = selB = null; selPart = null; render(); return;
   }
 
   // рисование
@@ -597,16 +740,46 @@ pinBtn.addEventListener('click', () => {
 lenInput.addEventListener('input', () => lenInput.classList.remove('bad'));
 document.getElementById('sel-reset').addEventListener('click', () => { selA = selB = null; render(); });
 
+/* ---------- простенки ---------- */
+const partModeBtn = document.getElementById('part-mode');
+partModeBtn.addEventListener('click', () => {
+  partMode = !partMode; pendingPart = null;
+  partModeBtn.textContent = 'Режим простенка: ' + (partMode ? 'вкл' : 'выкл');
+  partModeBtn.classList.toggle('primary', partMode);
+  say('info', partMode ? 'Режим простенка включён: кликните по стене или по точке контура.' : 'Режим простенка выключен.');
+  render();
+});
+document.getElementById('part-pin').addEventListener('click', () => {
+  if (selPart === null) return;
+  const r = DraftGeometry.lockPartition(S, selPart, parseInt(document.getElementById('part-len').value, 10));
+  if (r.ok) { S = r.state; say('ok', 'Длина простенка прибита: при пересчёте размеров она сохранится.'); }
+  else say('bad', r.reason);
+  render();
+});
+document.getElementById('part-unlock').addEventListener('click', () => {
+  if (selPart === null) return;
+  S = DraftGeometry.unlockPartition(S, selPart);
+  say('info', 'Замок с простенка снят — длина снова свободная.');
+  render();
+});
+document.getElementById('part-del').addEventListener('click', () => {
+  if (selPart === null) return;
+  S = DraftGeometry.removePartition(S, selPart);
+  selPart = null;
+  say('info', 'Простенок удалён.');
+  render();
+});
+
 document.getElementById('example-btn').addEventListener('click', () => {
   S = DraftGeometry.initial();
   [[0, 0], [600, 0], [600, 350], [250, 350], [250, 600], [0, 600]].forEach(p => { S = DraftGeometry.addPoint(S, p[0], p[1]); });
   S = DraftGeometry.closeContour(S);
-  selA = selB = null;
+  selA = selB = null; selPart = null; pendingPart = null;
   say('info', 'Г-образная комната загружена. Выберите две точки на одной стене и прибейте размер.');
   render();
 });
 document.getElementById('reset-btn').addEventListener('click', () => {
-  S = DraftGeometry.initial(); selA = selB = null;
+  S = DraftGeometry.initial(); selA = selB = null; selPart = null; pendingPart = null;
   say('info', 'Начисто. Кликайте по полю — ставьте углы.');
   render();
 });
