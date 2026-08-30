@@ -254,24 +254,19 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
       {floor ? (
         editingShell ? (
           <RoomEditor
-            roomName="Оболочка этажа"
-            contour={floor.shell.contour}
-            zones={[]}
-            openings={floor.shell.openings}
-            floors={project.floors}
-            floorId={floor.id}
-            shellMode
-            openingKinds={['window', 'entryDoor']}
+            plan={{
+              kind: 'shell',
+              name: 'Оболочка этажа',
+              contour: floor.shell.contour,
+              openings: floor.shell.openings,
+              openingKinds: ['window', 'entryDoor'],
+            }}
             allocateId={allocateId}
-            onChangeContour={(c) =>
+            onChange={(next) =>
               update((p) => {
-                p.floors.find((f) => f.id === floor.id)!.shell.contour = c;
-              })
-            }
-            onChangeZones={() => {}}
-            onChangeOpenings={(o) =>
-              update((p) => {
-                p.floors.find((f) => f.id === floor.id)!.shell.openings = o;
+                const shell = p.floors.find((f) => f.id === floor.id)!.shell;
+                shell.contour = next.contour;
+                shell.openings = next.openings;
               })
             }
             onDone={() => setEditingShell(false)}
@@ -281,34 +276,24 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
             const room = floor.rooms.find((r) => r.id === editingRoomId)!;
             return (
               <RoomEditor
-                roomName={room.name}
-                contour={room.contour}
-                zones={room.zones}
-                openings={room.openings}
-                floors={project.floors}
-                floorId={floor.id}
-                shellMode={false}
-                openingKinds={['innerDoor']}
+                plan={{
+                  kind: 'room',
+                  name: room.name,
+                  contour: room.contour,
+                  openings: room.openings,
+                  openingKinds: ['innerDoor'],
+                  zones: room.zones,
+                  floors: project.floors,
+                  floorId: floor.id,
+                }}
                 allocateId={allocateId}
-                onChangeContour={(c) =>
+                onChange={(next) =>
                   update((p) => {
                     const f = p.floors.find((f) => f.id === floor.id)!;
                     const r = f.rooms.find((r) => r.id === editingRoomId)!;
-                    r.contour = c;
-                  })
-                }
-                onChangeZones={(z) =>
-                  update((p) => {
-                    const f = p.floors.find((f) => f.id === floor.id)!;
-                    const r = f.rooms.find((r) => r.id === editingRoomId)!;
-                    r.zones = z;
-                  })
-                }
-                onChangeOpenings={(o) =>
-                  update((p) => {
-                    const f = p.floors.find((f) => f.id === floor.id)!;
-                    const r = f.rooms.find((r) => r.id === editingRoomId)!;
-                    r.openings = o;
+                    r.contour = next.contour;
+                    r.openings = next.openings;
+                    if (next.kind === 'room') r.zones = next.zones;
                   })
                 }
                 onDone={() => setEditingRoomId(null)}

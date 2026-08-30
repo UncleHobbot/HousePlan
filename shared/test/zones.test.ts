@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Contour, Zone } from '../src/index.js';
-import { tryLock } from '../src/geometry.js';
 import { rebaseZones } from '../src/zones.js';
 
 test('зона едет вместе со своей точкой при прибивании размера', () => {
@@ -25,10 +24,14 @@ test('зона едет вместе со своей точкой при при�
     clearances: { front: 0, back: 0, left: 0, right: 0 },
     attributes: [],
   };
-  const r = tryLock(contour, 1, 2, 500);
-  assert.equal(r.ok, true);
-  if (!r.ok) return;
-  const rebased = rebaseZones(contour.points, r.contour.points, [zone]);
+  // так выглядит контур после прибивания размера А1–А2 = 500
+  const moved = [
+    { id: 1, x: 0, y: 0 },
+    { id: 2, x: 500, y: 0 },
+    { id: 3, x: 500, y: 300 },
+    { id: 4, x: 0, y: 300 },
+  ];
+  const rebased = rebaseZones(contour.points, moved, [zone]);
   // А2 уехала с (600,0) на (500,0): зона сместилась на тот же вектор
   assert.equal(rebased[0].points[0].x, 500);
   assert.equal(rebased[0].points[1].x, 400);

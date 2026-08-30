@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react';
+import type Konva from 'konva';
+import { Group, Layer, Line, Stage, Text } from 'react-konva';
 import type { Floor, SceneObject, Zone } from '@houseplan/shared';
 import {
   bodyPolygon,
@@ -7,6 +9,11 @@ import {
   openingSegment,
   roomAt,
 } from '@houseplan/shared';
+import { createViewport } from './editor/roomCanvas/viewport';
+
+const STAGE_WIDTH = 960;
+const STAGE_HEIGHT = 560;
+const STAGE_PADDING = 60;
 
 const ZONE_COLORS: Record<string, string> = {
   stairs: '#7c3aed',
@@ -16,6 +23,13 @@ const ZONE_COLORS: Record<string, string> = {
   partition: '#dc2626',
   other: '#ca8a04',
 };
+
+function withAlpha(color: string, alpha: number): string {
+  const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(color);
+  if (!match) return color;
+  const [, red, green, blue] = match;
+  return `rgba(${Number.parseInt(red, 16)}, ${Number.parseInt(green, 16)}, ${Number.parseInt(blue, 16)}, ${alpha})`;
+}
 
 /**
  * План этажа с расстановкой: объекты перетаскиваются мышью, при выборе —
@@ -33,65 +47,87 @@ export function FloorView({
   onChangeFloor: (floor: Floor) => void;
 }) {
   const [selected, setSelected] = useState<number | null>(null);
-  const [mouse, setMouse] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ objectId: number; dx: number; dy: number } | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
+  const stageRef = useRef<Konva.Stage | null>(null);
 
-  const zones = [...floor.rooms.flatMap((r) => r.zones), ...(projectedZones ?? [])];
+  const zones = [...floor.rooms.flatMap((room) => room.zones), ...(projectedZones ?? [])];
   const conflicts = conflictObjectIds(objects, floor, zones);
-  const byId = new Map(objects.map((o) => [o.id, o]));
-
-  const placements = floor.rooms.flatMap((r) =>
-    r.placements.map((p) => ({ ...p, roomName: r.name })),
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  const placements = floor.rooms.flatMap((room) =>
+    room.placements.map((placement) => ({ ...placement, roomName: room.name })),
   );
-
-  // границы: контуры + объекты
-  const contours = [floor.shell.contour, ...floor.rooms.map((r) => r.contour)].filter(
-    (c) => c.closed && c.points.length >= 3,
-  );
-  const bodyPoints = floor.rooms.flatMap((r) =>
-    r.placements.flatMap((p) => {
-      const o = byId.get(p.objectId);
-      return o ? bodyPolygon(o, p) : [];
+  const contourEntries = [
+    { contour: floor.shell.contour, openings: floor.shell.openings, shell: true },
+    ...floor.rooms.map((room) => ({
+      contour: room.contour,
+      openings: room.openings,
+      shell: false,
+    })),
+  ].filter(({ contour }) => contour.closed && contour.points.length >= 3);
+  const bodyPoints = floor.rooms.flatMap((room) =>
+    room.placements.flatMap((placement) => {
+      const object = byId.get(placement.objectId);
+      return object ? bodyPolygon(object, placement) : [];
     }),
   );
-  const xs = [...contours.flatMap((c) => c.points.map((p) => p.x)), ...bodyPoints.map((p) => p.x)];
-  const ys = [...contours.flatMap((c) => c.points.map((p) => p.y)), ...bodyPoints.map((p) => p.y)];
-  if (xs.length === 0) return <p className="muted">Этаж пуст.</p>;
-  const minX = Math.min(...xs) - 60;
-  const maxX = Math.max(...xs) + 60;
-  const minY = Math.min(...ys) - 60;
-  const maxY = Math.max(...ys) + 60;
-  const k = Math.min(860 / (maxX - minX), 560 / (maxY - minY));
-  const X = (x: number) => (x - minX) * k;
-  const Y = (y: number) => (y - minY) * k;
-  const invX = (px: number) => px / k + minX;
-  const invY = (py: number) => py / k + minY;
+  const planPoints = [
+    ...contourEntries.flatMap(({ contour }) => contour.points),
+    ...bodyPoints,
+  ];
 
-  const polyStr = (poly: { x: number; y: number }[]) => poly.map((p) => `${X(p.x)},${Y(p.y)}`).join(' ');
+  if (planPoints.length === 0) return <p className="muted">Этаж пуст.</p>;
 
-  function svgPoint(e: { clientX: number; clientY: number }): { x: number; y: number } {
-    const rect = svgRef.current!.getBoundingClientRect();
-    return {
-      x: invX(((e.clientX - rect.left) / rect.width) * 960),
-      y: invY(((e.clientY - rect.top) / rect.height) * 560),
-    };
+  const viewport = createViewport(planPoints, {
+    width: STAGE_WIDTH,
+    height: STAGE_HEIGHT,
+    padding: STAGE_PADDING,
+  });
+
+  function pointerInPlan(): { x: number; y: number } | null {
+    const pointer = stageRef.current?.getPointerPosition();
+    return pointer ? viewport.toWorld(pointer) : null;
+  }
+
+  function clientPointInPlan(event: { clientX: number; clientY: number }): { x: number; y: number } | null {
+    const stage = stageRef.current;
+    if (!stage) return null;
+    const rect = stage.container().getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    return viewport.toWorld({
+      x: ((event.clientX - rect.left) / rect.width) * STAGE_WIDTH,
+      y: ((event.clientY - rect.top) / rect.height) * STAGE_HEIGHT,
+    });
   }
 
   function movePlacement(objectId: number, x: number, y: number) {
     const targetRoom = roomAt(floor, x, y);
-    const current = floor.rooms.find((r) => r.placements.some((p) => p.objectId === objectId));
+    const current = floor.rooms.find((room) =>
+      room.placements.some((placement) => placement.objectId === objectId),
+    );
     const roomId = targetRoom ?? current?.id;
     if (roomId === undefined) return;
-    const rotation = current?.placements.find((p) => p.objectId === objectId)?.rotationDeg ?? 0;
+    const rotation =
+      current?.placements.find((placement) => placement.objectId === objectId)?.rotationDeg ?? 0;
     onChangeFloor({
       ...floor,
-      rooms: floor.rooms.map((r) => {
-        const without = r.placements.filter((p) => p.objectId !== objectId);
-        if (r.id === roomId) {
-          return { ...r, placements: [...without, { objectId, roomId, x: Math.round(x), y: Math.round(y), rotationDeg: rotation }] };
+      rooms: floor.rooms.map((room) => {
+        const without = room.placements.filter((placement) => placement.objectId !== objectId);
+        if (room.id === roomId) {
+          return {
+            ...room,
+            placements: [
+              ...without,
+              {
+                objectId,
+                roomId,
+                x: Math.round(x),
+                y: Math.round(y),
+                rotationDeg: rotation,
+              },
+            ],
+          };
         }
-        return { ...r, placements: without };
+        return { ...room, placements: without };
       }),
     });
   }
@@ -100,10 +136,15 @@ export function FloorView({
     if (selected === null) return;
     onChangeFloor({
       ...floor,
-      rooms: floor.rooms.map((r) => ({
-        ...r,
-        placements: r.placements.map((p) =>
-          p.objectId === selected ? { ...p, rotationDeg: ((p.rotationDeg + delta) % 360 + 360) % 360 } : p,
+      rooms: floor.rooms.map((room) => ({
+        ...room,
+        placements: room.placements.map((placement) =>
+          placement.objectId === selected
+            ? {
+                ...placement,
+                rotationDeg: ((placement.rotationDeg + delta) % 360 + 360) % 360,
+              }
+            : placement,
         ),
       })),
     });
@@ -113,148 +154,229 @@ export function FloorView({
     if (selected === null) return;
     onChangeFloor({
       ...floor,
-      rooms: floor.rooms.map((r) => ({ ...r, placements: r.placements.filter((p) => p.objectId !== selected) })),
+      rooms: floor.rooms.map((room) => ({
+        ...room,
+        placements: room.placements.filter((placement) => placement.objectId !== selected),
+      })),
     });
     setSelected(null);
   }
 
-  function onMouseDownOnObject(e: React.MouseEvent, objectId: number, x: number, y: number) {
-    const raw = svgPoint(e);
-    dragRef.current = { objectId, dx: raw.x - x, dy: raw.y - y };
+  function startObjectDrag(
+    event: Konva.KonvaEventObject<MouseEvent>,
+    objectId: number,
+    x: number,
+    y: number,
+  ) {
+    const point = pointerInPlan();
+    if (!point) return;
+    dragRef.current = { objectId, dx: point.x - x, dy: point.y - y };
     setSelected(objectId);
-    e.stopPropagation();
+    event.cancelBubble = true;
   }
 
-  function svgClickDropHandler(e: React.DragEvent) {
-    e.preventDefault();
-    const objectId = Number(e.dataTransfer.getData('text/objectid'));
+  function dropObject(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const objectId = Number(event.dataTransfer.getData('text/objectid'));
     if (!objectId) return;
-    const p = svgPoint(e);
-    const roomId = roomAt(floor, p.x, p.y);
-    if (roomId === null) {
-      return;
-    }
+    const point = clientPointInPlan(event);
+    if (!point) return;
+    const roomId = roomAt(floor, point.x, point.y);
+    if (roomId === null) return;
     onChangeFloor({
       ...floor,
-      rooms: floor.rooms.map((r) =>
-        r.id === roomId
+      rooms: floor.rooms.map((room) =>
+        room.id === roomId
           ? {
-              ...r,
+              ...room,
               placements: [
-                ...r.placements.filter((placement) => placement.objectId !== objectId),
-                { objectId, roomId, x: Math.round(p.x), y: Math.round(p.y), rotationDeg: 0 },
+                ...room.placements.filter((placement) => placement.objectId !== objectId),
+                {
+                  objectId,
+                  roomId,
+                  x: Math.round(point.x),
+                  y: Math.round(point.y),
+                  rotationDeg: 0,
+                },
               ],
             }
-          : { ...r, placements: r.placements.filter((pl) => pl.objectId !== objectId) },
+          : {
+              ...room,
+              placements: room.placements.filter(
+                (placement) => placement.objectId !== objectId,
+              ),
+            },
       ),
     });
   }
 
   return (
-    <div>
-      {selected !== null && (
+    <div style={{ flex: '1 1 600px', minWidth: 0 }}>
+      {selected !== null ? (
         <div className="row">
           <span className="muted">
             Выбрано: <b>{byId.get(selected)?.name ?? '?'}</b>
-            {conflicts.has(selected) && <b className="bad-text"> · допуск пересекает чужое тело или зону</b>}
+            {conflicts.has(selected) ? (
+              <b className="bad-text"> · допуск пересекает чужое тело или зону</b>
+            ) : null}
           </span>
           <button onClick={() => rotateSelected(-15)}>⟲ −15°</button>
           <button onClick={() => rotateSelected(15)}>⟳ +15°</button>
           <button onClick={removeFromPlan}>Убрать на склад</button>
         </div>
-      )}
-      <svg
-        ref={svgRef}
-        viewBox="0 0 960 560"
-        className="plan"
-        onMouseMove={(e) => {
-          const raw = svgPoint(e);
-          setMouse(raw);
-          if (dragRef.current) {
-            const d = dragRef.current;
-            movePlacement(d.objectId, raw.x - d.dx, raw.y - d.dy);
-          }
-        }}
-        onMouseUp={() => {
-          dragRef.current = null;
-        }}
-        onMouseLeave={() => {
-          dragRef.current = null;
-        }}
-        onClick={() => setSelected(null)}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={svgClickDropHandler}
+      ) : null}
+      <div
+        style={{ maxWidth: '100%', overflow: 'auto' }}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={dropObject}
       >
-        {/* сетки нет: обзор этажа */}
+        <Stage
+          ref={stageRef}
+          width={STAGE_WIDTH}
+          height={STAGE_HEIGHT}
+          className="plan"
+          onMouseMove={() => {
+            const point = pointerInPlan();
+            const drag = dragRef.current;
+            if (point && drag) {
+              movePlacement(drag.objectId, point.x - drag.dx, point.y - drag.dy);
+            }
+          }}
+          onMouseUp={() => {
+            dragRef.current = null;
+          }}
+          onMouseLeave={() => {
+            dragRef.current = null;
+          }}
+          onClick={() => setSelected(null)}
+        >
+          <Layer>
+            {zones.map((zone, zoneIndex) => {
+              const color = ZONE_COLORS[zone.kind] ?? '#ca8a04';
+              const center = {
+                x: zone.points.reduce((sum, point) => sum + point.x, 0) / zone.points.length,
+                y: zone.points.reduce((sum, point) => sum + point.y, 0) / zone.points.length,
+              };
+              const label = viewport.toCanvas(center);
+              return (
+                <Group key={`${zone.id}-${zoneIndex}`}>
+                  <Line
+                    points={viewport.flatten(zone.points)}
+                    closed
+                    fill={withAlpha(color, 0.3)}
+                    stroke={color}
+                    strokeWidth={2}
+                  />
+                  <Text
+                    x={label.x + 4}
+                    y={label.y - 16}
+                    text={zone.name}
+                    fontSize={12}
+                    fill={color}
+                    fontStyle="bold"
+                  />
+                </Group>
+              );
+            })}
 
-        {/* зоны */}
-        {zones.map((z, zoneIndex) => {
-          const color = ZONE_COLORS[z.kind] ?? '#ca8a04';
-          const d = z.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${X(p.x)} ${Y(p.y)}`).join(' ') + ' Z';
-          const cx = z.points.reduce((a, p) => a + p.x, 0) / z.points.length;
-          const cy = z.points.reduce((a, p) => a + p.y, 0) / z.points.length;
-          return (
-            <g key={`${z.id}-${zoneIndex}`}>
-              <path d={d} fill={color} fillOpacity={0.3} stroke={color} strokeWidth={2} />
-              <text x={X(cx) + 4} y={Y(cy) - 4} fontSize={12} fill={color} fontWeight={700}>
-                {z.name}
-              </text>
-            </g>
-          );
-        })}
+            {contourEntries.flatMap(({ contour, openings }) =>
+              openings.map((opening) => {
+                const segment = openingSegment(
+                  contour.points,
+                  opening.wallPointId,
+                  opening.offsetCm,
+                  opening.widthCm,
+                );
+                if (!segment) return null;
+                return (
+                  <Line
+                    key={opening.id}
+                    points={viewport.flatten([segment.start, segment.end])}
+                    stroke={opening.kind === 'window' ? '#2563eb' : '#b45309'}
+                    strokeWidth={7}
+                    lineCap="butt"
+                  />
+                );
+              }),
+            )}
 
-        {/* проёмы */}
-        {contours.map((c, ci) => {
-          const openings = ci === 0 ? floor.shell.openings : floor.rooms[ci - 1]?.openings ?? [];
-          return openings.map((o) => {
-            const seg = openingSegment(c.points, o.wallPointId, o.offsetCm, o.widthCm);
-            if (!seg) return null;
-            const color = o.kind === 'window' ? '#2563eb' : '#b45309';
-            return (
-              <line
-                key={o.id}
-                x1={X(seg.start.x)} y1={Y(seg.start.y)} x2={X(seg.end.x)} y2={Y(seg.end.y)}
-                stroke={color} strokeWidth={7} strokeLinecap="butt"
+            {contourEntries.map(({ contour, shell }, index) => (
+              <Line
+                key={`${shell ? 'shell' : 'room'}-${index}`}
+                points={viewport.flatten(contour.points)}
+                closed
+                stroke={shell ? '#334155' : '#94a3b8'}
+                strokeWidth={2}
               />
-            );
-          });
-        })}
+            ))}
 
-        {/* контуры */}
-        {contours.map((c, i) => (
-          <path
-            key={i}
-            d={c.points.map((p, j) => `${j === 0 ? 'M' : 'L'} ${X(p.x)} ${Y(p.y)}`).join(' ') + ' Z'}
-            fill="none"
-            stroke={i === 0 ? '#334155' : '#94a3b8'}
-            strokeWidth={2}
-          />
-        ))}
-
-        {/* объекты: допуск + тело + метка «перед» */}
-        {placements.map((p) => {
-          const obj = byId.get(p.objectId);
-          if (!obj) return null;
-          const body = bodyPolygon(obj, p);
-          const cl = clearancePolygon(obj, p);
-          const conflict = conflicts.has(p.objectId);
-          const isSelected = selected === p.objectId;
-          return (
-            <g
-              key={p.objectId}
-              onMouseDown={(e) => onMouseDownOnObject(e, p.objectId, p.x, p.y)}
-              style={{ cursor: 'move' }}
-            >
-              <polygon points={polyStr(cl)} fill={conflict ? '#dc2626' : '#2563eb'} fillOpacity={0.14} stroke={conflict ? '#dc2626' : '#93c5fd'} strokeWidth={1} strokeDasharray="4 3" />
-              <polygon points={polyStr(body)} fill={obj.color || '#0e7490'} fillOpacity={0.75} stroke={isSelected ? '#16a34a' : '#0f172a'} strokeWidth={isSelected ? 2.5 : 1} />
-              <line x1={X(body[2].x)} y1={Y(body[2].y)} x2={X(body[3].x)} y2={Y(body[3].y)} stroke="#ffffff" strokeWidth={3} />
-              <text x={X(p.x)} y={Y(p.y) + 4} fontSize={11} textAnchor="middle" fill="#0f172a" fontWeight={700}>
-                {obj.name}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+            {placements.map((placement) => {
+              const object = byId.get(placement.objectId);
+              if (!object) return null;
+              const body = bodyPolygon(object, placement);
+              const clearance = clearancePolygon(object, placement);
+              const conflict = conflicts.has(placement.objectId);
+              const isSelected = selected === placement.objectId;
+              const label = viewport.toCanvas(placement);
+              return (
+                <Group
+                  key={placement.objectId}
+                  onMouseDown={(event) =>
+                    startObjectDrag(
+                      event,
+                      placement.objectId,
+                      placement.x,
+                      placement.y,
+                    )
+                  }
+                  onClick={(event) => {
+                    event.cancelBubble = true;
+                  }}
+                  onMouseEnter={(event) => {
+                    const stage = event.currentTarget.getStage();
+                    if (stage) stage.container().style.cursor = 'move';
+                  }}
+                  onMouseLeave={(event) => {
+                    const stage = event.currentTarget.getStage();
+                    if (stage) stage.container().style.cursor = 'default';
+                  }}
+                >
+                  <Line
+                    points={viewport.flatten(clearance)}
+                    closed
+                    fill={withAlpha(conflict ? '#dc2626' : '#2563eb', 0.14)}
+                    stroke={conflict ? '#dc2626' : '#93c5fd'}
+                    strokeWidth={1}
+                    dash={[4, 3]}
+                  />
+                  <Line
+                    points={viewport.flatten(body)}
+                    closed
+                    fill={withAlpha(object.color || '#0e7490', 0.75)}
+                    stroke={isSelected ? '#16a34a' : '#0f172a'}
+                    strokeWidth={isSelected ? 2.5 : 1}
+                  />
+                  <Line
+                    points={viewport.flatten([body[2], body[3]])}
+                    stroke="#ffffff"
+                    strokeWidth={3}
+                  />
+                  <Text
+                    x={label.x - 70}
+                    y={label.y - 6}
+                    width={140}
+                    text={object.name}
+                    align="center"
+                    fontSize={11}
+                    fill="#0f172a"
+                    fontStyle="bold"
+                  />
+                </Group>
+              );
+            })}
+          </Layer>
+        </Stage>
+      </div>
     </div>
   );
 }
