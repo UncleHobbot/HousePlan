@@ -203,8 +203,12 @@ export interface Project {
   objects: SceneObject[];
   snapshots: Snapshot[];
   /** счётчики идентификаторов (по каждому виду сущностей) */
-  counters: Partial<Record<'floor' | 'room' | 'point' | 'opening' | 'zone' | 'object' | 'snapshot', number>>;
+  counters: ProjectCounters;
 }
+
+export type IdKind = 'floor' | 'room' | 'point' | 'opening' | 'zone' | 'object' | 'snapshot';
+
+export type ProjectCounters = Partial<Record<IdKind, number>>;
 
 /** Пустой проект с именем */
 export function emptyProject(name: string): Project {
@@ -218,14 +222,42 @@ export function emptyProject(name: string): Project {
   };
 }
 
-/** Следующий идентификатор вида сущности внутри проекта */
-export function nextId(
-  project: Project,
-  kind: 'floor' | 'room' | 'point' | 'opening' | 'zone' | 'object' | 'snapshot',
-): number {
+/**
+ * Выдать следующий идентификатор вида kind, увеличив счётчик проекта.
+ * Вызывать внутри копии проекта, которую собираетесь сохранить.
+ */
+export function allocateId(project: Project, kind: IdKind): number {
   const value = (project.counters[kind] ?? 0) + 1;
   project.counters[kind] = value;
   return value;
+}
+
+/**
+ * Поднять счётчики выше максимальных существующих идентификаторов.
+ * Единственный владелец инварианта: вызывать после загрузки, отмены,
+ * возврата варианта, переименования и приёма импорта.
+ */
+export function rebaseCounters(project: Project): void {
+  const ids: Record<IdKind, number[]> = {
+    floor: [], room: [], point: [], opening: [], zone: [], object: [], snapshot: [],
+  };
+  for (const floor of project.floors) {
+    ids.floor.push(floor.id);
+    ids.point.push(...floor.shell.contour.points.map((point) => point.id));
+    ids.opening.push(...floor.shell.openings.map((opening) => opening.id));
+    for (const room of floor.rooms) {
+      ids.room.push(room.id);
+      ids.point.push(...room.contour.points.map((point) => point.id));
+      ids.opening.push(...room.openings.map((opening) => opening.id));
+      ids.zone.push(...room.zones.map((zone) => zone.id));
+      ids.point.push(...room.zones.flatMap((zone) => zone.points.map((point) => point.id)));
+    }
+  }
+  ids.object.push(...project.objects.map((object) => object.id));
+  ids.snapshot.push(...project.snapshots.map((snapshot) => snapshot.id));
+  for (const kind of Object.keys(ids) as IdKind[]) {
+    project.counters[kind] = Math.max(project.counters[kind] ?? 0, 0, ...ids[kind]);
+  }
 }
 
 /** Прямоугольная комната по умолчанию — заготовка при добавлении помещения */
@@ -233,10 +265,10 @@ export function defaultRoom(project: Project, id: number, name: string, originX:
   const w = 400;
   const h = 300;
   const pts: Point[] = [
-    { id: nextId(project, 'point'), x: originX, y: originY },
-    { id: nextId(project, 'point'), x: originX + w, y: originY },
-    { id: nextId(project, 'point'), x: originX + w, y: originY + h },
-    { id: nextId(project, 'point'), x: originX, y: originY + h },
+    { id: allocateId(project, 'point'), x: originX, y: originY },
+    { id: allocateId(project, 'point'), x: originX + w, y: originY },
+    { id: allocateId(project, 'point'), x: originX + w, y: originY + h },
+    { id: allocateId(project, 'point'), x: originX, y: originY + h },
   ];
   const thicknesses: Record<number, Cm> = {};
   for (const p of pts) thicknesses[p.id] = 10;

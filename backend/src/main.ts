@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FORMAT_VERSION, Project, type AssistantCard, type ObjectCategory, type SceneObject } from '@houseplan/shared';
+import { allocateId, FORMAT_VERSION, Project, type AssistantCard, type ObjectCategory, type SceneObject } from '@houseplan/shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -263,8 +263,7 @@ app.post('/api/import/accept', asyncHandler(async (req, res) => {
   const project = await readProject(projectName);
   const card = JSON.parse(await fs.readFile(path.join(IMPORT_DIR, file), 'utf8')) as AssistantCard;
   const object = cardToSceneObject(card);
-  const id = (project.counters.object ?? 0) + 1;
-  project.counters.object = id;
+  const id = allocateId(project, 'object');
   const created: SceneObject = { ...object, id };
   project.objects.push(created);
   // картинки из папки импорта переезжают в папку картинок проекта

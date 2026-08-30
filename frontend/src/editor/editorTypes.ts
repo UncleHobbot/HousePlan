@@ -1,4 +1,4 @@
-import type { Contour, Floor, Opening, OpeningKind, Point, Zone, ZoneKind } from '@houseplan/shared';
+import type { Contour, Floor, Opening, OpeningKind, Point, ProjectCounters, Zone, ZoneKind } from '@houseplan/shared';
 
 export type EditablePlan =
   | {
@@ -7,6 +7,7 @@ export type EditablePlan =
       contour: Contour;
       openings: Opening[];
       openingKinds: Extract<OpeningKind, 'window' | 'entryDoor'>[];
+      counters: ProjectCounters;
     }
   | {
       kind: 'room';
@@ -17,11 +18,11 @@ export type EditablePlan =
       zones: Zone[];
       floors: Floor[];
       floorId: number;
+      counters: ProjectCounters;
     };
 
 export interface RoomEditorProps {
   plan: EditablePlan;
-  allocateId: (kind: 'point' | 'opening' | 'zone') => number;
   onChange: (plan: EditablePlan) => void;
   onDone: () => void;
 }

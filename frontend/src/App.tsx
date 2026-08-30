@@ -5,6 +5,8 @@ import {
   createSnapshot,
   diffPlacements,
   livePlacements,
+  rebaseCounters,
+  allocateId,
 } from '@houseplan/shared';
 import { api, type ImportCard, type ProjectSummary } from './api';
 import { FloorView } from './FloorView';
@@ -15,31 +17,6 @@ function bboxArea(c: Contour): number {
   const xs = c.points.map((p) => p.x);
   const ys = c.points.map((p) => p.y);
   return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-}
-
-type ProjectIdKind = keyof Project['counters'];
-
-function synchroniseCounters(project: Project): void {
-  const ids: Record<ProjectIdKind, number[]> = {
-    floor: [], room: [], point: [], opening: [], zone: [], object: [], snapshot: [],
-  };
-  for (const floor of project.floors) {
-    ids.floor.push(floor.id);
-    ids.point.push(...floor.shell.contour.points.map((point) => point.id));
-    ids.opening.push(...floor.shell.openings.map((opening) => opening.id));
-    for (const room of floor.rooms) {
-      ids.room.push(room.id);
-      ids.point.push(...room.contour.points.map((point) => point.id));
-      ids.opening.push(...room.openings.map((opening) => opening.id));
-      ids.zone.push(...room.zones.map((zone) => zone.id));
-      ids.point.push(...room.zones.flatMap((zone) => zone.points.map((point) => point.id)));
-    }
-  }
-  ids.object.push(...project.objects.map((object) => object.id));
-  ids.snapshot.push(...project.snapshots.map((snapshot) => snapshot.id));
-  for (const kind of Object.keys(ids) as ProjectIdKind[]) {
-    project.counters[kind] = Math.max(project.counters[kind] ?? 0, 0, ...ids[kind]);
-  }
 }
 
 export function App() {
@@ -127,7 +104,6 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
   const [dirty, setDirty] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
   const [editingShell, setEditingShell] = useState(false);
-  const idCounters = useRef<Project['counters']>({});
   const [snapName, setSnapName] = useState('');
   const [snapNote, setSnapNote] = useState('');
   const [compareWith, setCompareWith] = useState<number | null>(null);
@@ -148,8 +124,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     api
       .readProject(name)
       .then((p) => {
-        synchroniseCounters(p);
-        idCounters.current = { ...p.counters };
+        rebaseCounters(p);
         setProject(p);
         setActiveFloor(p.floors[0]?.id ?? null);
       })
@@ -172,9 +147,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
       if (!current) return current;
       const copy = structuredClone(current);
       change(copy);
-      for (const kind of ['point', 'opening', 'zone'] as const) {
-        copy.counters[kind] = Math.max(copy.counters[kind] ?? 0, idCounters.current[kind] ?? 0);
-      }
+      rebaseCounters(copy);
       return copy;
     });
   }
@@ -183,8 +156,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     const previous = historyRef.current.pop();
     if (!previous || !project) return;
     redoRef.current.push(project);
-    synchroniseCounters(previous);
-    idCounters.current = { ...previous.counters };
+    rebaseCounters(previous);
     setProject(previous);
     setDirty(true);
     setCanUndo(historyRef.current.length > 0);
@@ -196,8 +168,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     const next = redoRef.current.pop();
     if (!next || !project) return;
     historyRef.current.push(project);
-    synchroniseCounters(next);
-    idCounters.current = { ...next.counters };
+    rebaseCounters(next);
     setProject(next);
     setDirty(true);
     setCanUndo(true);
@@ -221,16 +192,12 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  function allocateId(kind: ProjectIdKind): number {
-    const id = (idCounters.current[kind] ?? 0) + 1;
-    idCounters.current[kind] = id;
-    return id;
-  }
+
 
   function addFloor() {
     if (!project) return;
     update((p) => {
-      const id = (p.counters.floor ?? 0) + 1;
+      const id = allocateId(p, 'floor');
       p.counters.floor = id;
       const neighbour = p.floors.find((floor) => floor.id === activeFloor) ?? p.floors[p.floors.length - 1];
       p.floors.push({
@@ -248,20 +215,22 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
 
   function startDrawingRoom(floor: Floor) {
     if (!project) return;
+    // предсказываем идентификатор из текущих счётчиков — update() выделит ровно его
     const id = (project.counters.room ?? 0) + 1;
     update((p) => {
       const f = p.floors.find((f) => f.id === floor.id)!;
-      p.counters.room = id;
+      const allocated = allocateId(p, 'room');
+      p.counters.room = allocated;
       f.rooms.push({
-        id,
-        name: `Комната ${id}`,
+        id: allocated,
+        name: `Комната ${allocated}`,
         contour: { points: [], thicknesses: {}, locks: [], closed: false },
         openings: [],
         zones: [],
         placements: [],
       });
+      setEditingRoomId(allocated);
     });
-    setEditingRoomId(id);
   }
 
   async function save() {
@@ -295,8 +264,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     if (!window.confirm(`Вернуть вариант «${snapshot.name}»? Текущая расстановка будет перезаписана.`)) return;
     pushHistory();
     const restored = applySnapshot(project, snapshot);
-    synchroniseCounters(restored);
-    idCounters.current = { ...restored.counters };
+    rebaseCounters(restored);
     setProject(restored);
     setDirty(true);
     setActiveFloor((current) => (restored.floors.some((f) => f.id === current) ? current : restored.floors[0]?.id ?? null));
@@ -350,8 +318,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     }
     try {
       const result = await api.renameProject(name, newName);
-      synchroniseCounters(result.project);
-      idCounters.current = { ...result.project.counters };
+      rebaseCounters(result.project);
       setProject(result.project);
       setDirty(false);
       setRenaming(false);
@@ -386,7 +353,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
       redoRef.current = [];
       setCanUndo(false);
       setCanRedo(false);
-      synchroniseCounters(result.project);
+      rebaseCounters(result.project);
       setProject(result.project);
       setDirty(false);
       setImportCards(await api.listImport());
@@ -554,8 +521,8 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
               contour: floor.shell.contour,
               openings: floor.shell.openings,
               openingKinds: ['window', 'entryDoor'],
+              counters: project.counters,
             }}
-            allocateId={allocateId}
             onChange={(next) =>
               update((p) => {
                 const shell = p.floors.find((f) => f.id === floor.id)!.shell;
@@ -576,12 +543,12 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                   contour: room.contour,
                   openings: room.openings,
                   openingKinds: ['innerDoor'],
+                  counters: project.counters,
                   zones: room.zones,
                   floors: project.floors,
                   floorId: floor.id,
                 }}
-                allocateId={allocateId}
-                onChange={(next) =>
+                    onChange={(next) =>
                   update((p) => {
                     const f = p.floors.find((f) => f.id === floor.id)!;
                     const r = f.rooms.find((r) => r.id === editingRoomId)!;
@@ -682,7 +649,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 }}
                 onCreate={(object) =>
                   update((p) => {
-                    const id = (p.counters.object ?? 0) + 1;
+                    const id = allocateId(p, 'object');
                     p.counters.object = id;
                     p.objects.push({ ...object, id });
                   })
@@ -695,7 +662,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 }
                 onClone={(object) =>
                   update((p) => {
-                    const id = (p.counters.object ?? 0) + 1;
+                    const id = allocateId(p, 'object');
                     p.counters.object = id;
                     p.objects.push({ ...structuredClone(object), id, name: object.name + ' (копия)' });
                   })

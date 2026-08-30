@@ -30,7 +30,15 @@ const INITIAL_BANNER: Banner = {
   text: 'Кликайте по полю — ставьте углы; клик в первую точку замыкает контур.',
 };
 
-export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditorProps, 'plan' | 'allocateId' | 'onChange'>) {
+export function useEditorSession({ plan, onChange }: Pick<RoomEditorProps, 'plan' | 'onChange'>) {
+  const counters = plan.counters;
+  /** Спекулятивный идентификатор из счётчиков проекта; точку поднимет rebaseCounters при применении. */
+  function nextId(kind: 'point' | 'opening' | 'zone'): number {
+    const base = Math.max(idSeq.current[kind] ?? 0, counters[kind] ?? 0);
+    idSeq.current[kind] = base + 1;
+    return base + 1;
+  }
+  const idSeq = useRef<Partial<Record<'point' | 'opening' | 'zone', number>>>({});
   const contour = plan.contour;
   const points = contour.points;
   const zones = plan.kind === 'room' ? plan.zones : [];
@@ -151,7 +159,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
       x: Math.round((start.x + end.x) / 2),
       y: Math.round((start.y + end.y) / 2),
     };
-    const pointId = allocateId('point');
+    const pointId = nextId('point');
     const nextPoints = [...points];
     nextPoints.splice(wallIndex + 1, 0, { id: pointId, ...coords });
     const thicknesses = { ...contour.thicknesses, [pointId]: contour.thicknesses[start.id] ?? 10 };
@@ -183,7 +191,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
       return;
     }
     const zone: Zone = {
-      id: allocateId('zone'),
+      id: nextId('zone'),
       kind: zoneDraft.kind,
       name: ZONE_KIND_LABELS[zoneDraft.kind],
       points: zoneDraft.points,
@@ -205,7 +213,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
         setZoneDraft({
           kind: zoneKind === 'decorativeWall' ? 'decorativeWall' : 'partition',
           anchorId: anchor.pointId,
-          points: [{ id: allocateId('point'), ...anchor.coords }],
+          points: [{ id: nextId('point'), ...anchor.coords }],
           wallDir: anchor.wallDir,
         });
         return say('info', 'Теперь кликните второй конец простенка.');
@@ -222,7 +230,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
       }
       const length = (event.position.x - anchor.x) * nx + (event.position.y - anchor.y) * ny;
       if (length < 20) return say('bad', 'Простенок слишком короткий.');
-      const ids = [1, 2, 3, 4].map(() => allocateId('point'));
+      const ids = [1, 2, 3, 4].map(() => nextId('point'));
       const corners: Point[] = [
         { id: ids[0], x: anchor.x, y: anchor.y },
         { id: ids[1], x: Math.round(anchor.x + nx * length), y: Math.round(anchor.y + ny * length) },
@@ -230,7 +238,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
         { id: ids[3], x: Math.round(anchor.x + direction.x * PARTITION_THICKNESS_CM), y: Math.round(anchor.y + direction.y * PARTITION_THICKNESS_CM) },
       ];
       const zone: Zone = {
-        id: allocateId('zone'),
+        id: nextId('zone'),
         kind: zoneDraft.kind,
         name: ZONE_KIND_LABELS[zoneDraft.kind],
         points: corners,
@@ -247,7 +255,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
     if (!zoneDraft) {
       const anchor = anchorFromEvent(event);
       if (!anchor) return say('info', 'Кликните по стене (зона приляжет к ней) или по точке контура.');
-      setZoneDraft({ kind: zoneKind, anchorId: anchor.pointId, points: [{ id: allocateId('point'), ...anchor.coords }], wallDir: null });
+      setZoneDraft({ kind: zoneKind, anchorId: anchor.pointId, points: [{ id: nextId('point'), ...anchor.coords }], wallDir: null });
       return say('info', 'Кликайте вершины зоны; клик рядом с первой точкой замыкает.');
     }
     const first = zoneDraft.points[0];
@@ -256,7 +264,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
       return;
     }
     const position = snapPoint(event.position, points, contour.closed, snap);
-    setZoneDraft({ ...zoneDraft, points: [...zoneDraft.points, { id: allocateId('point'), ...position }] });
+    setZoneDraft({ ...zoneDraft, points: [...zoneDraft.points, { id: nextId('point'), ...position }] });
   }
 
   function placeOpening(event: CanvasPointerEvent) {
@@ -271,7 +279,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
     const along = (event.position.x - start.x) * direction.x + (event.position.y - start.y) * direction.y;
     const defaults = OPENING_DEFAULTS[openingMode];
     const opening: Opening = {
-      id: allocateId('opening'),
+      id: nextId('opening'),
       kind: openingMode,
       wallPointId: start.id,
       offsetCm: Math.max(0, Math.min(Math.round(along - defaults.width / 2), Math.max(0, Math.round(wallLength) - defaults.width))),
@@ -311,7 +319,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
       return;
     }
     const position = snapPoint(event.position, points, contour.closed, snap);
-    applyContour({ ...contour, points: [...points, { id: allocateId('point'), ...position }] });
+    applyContour({ ...contour, points: [...points, { id: nextId('point'), ...position }] });
     say('info', 'Точка поставлена. Клик в первую точку замыкает контур.');
   }
 

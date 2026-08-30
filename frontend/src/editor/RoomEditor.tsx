@@ -14,8 +14,8 @@ import { ZonesPanel } from './panels/ZonesPanel';
  * `useEditorSession`, рисование — в `RoomCanvas`, а боковые карточки —
  * в `panels/`.
  */
-export function RoomEditor({ plan, allocateId, onChange, onDone }: RoomEditorProps) {
-  const session = useEditorSession({ plan, allocateId, onChange });
+export function RoomEditor({ plan, onChange, onDone }: RoomEditorProps) {
+  const session = useEditorSession({ plan, onChange });
   const contour = plan.contour;
   const zones = plan.kind === 'room' ? plan.zones : [];
   const floors = plan.kind === 'room' ? plan.floors : [];
