@@ -1,9 +1,14 @@
-import type { Project } from '@houseplan/shared';
+import type { AssistantCard, Project, SceneObject } from '@houseplan/shared';
 
 export interface ProjectSummary {
   name: string;
   floors: number;
   objects: number;
+}
+
+export interface ImportCard {
+  file: string;
+  card: AssistantCard;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -28,4 +33,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(project),
     }),
+  listImport: () => request<ImportCard[]>('/api/import'),
+  acceptImport: (file: string, projectName: string) =>
+    request<{ project: Project; object: SceneObject }>('/api/import/accept', {
+      method: 'POST',
+      body: JSON.stringify({ file, project: projectName }),
+    }),
+  rejectImport: (file: string) =>
+    request<{ ok: true }>('/api/import/reject', { method: 'POST', body: JSON.stringify({ file }) }),
 };

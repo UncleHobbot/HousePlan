@@ -39,11 +39,14 @@ export function FloorView({
   floor,
   objects,
   projectedZones,
+  highlight,
   onChangeFloor,
 }: {
   floor: Floor;
   objects: SceneObject[];
   projectedZones?: Zone[];
+  /** объекты, помеченные сравнением вариантов (переехали или добавлены) */
+  highlight?: Set<number>;
   onChangeFloor: (floor: Floor) => void;
 }) {
   const [selected, setSelected] = useState<number | null>(null);
@@ -317,6 +320,7 @@ export function FloorView({
               const clearance = clearancePolygon(object, placement);
               const conflict = conflicts.has(placement.objectId);
               const isSelected = selected === placement.objectId;
+              const isHighlighted = highlight?.has(placement.objectId) ?? false;
               const label = viewport.toCanvas(placement);
               return (
                 <Group
@@ -353,8 +357,9 @@ export function FloorView({
                     points={viewport.flatten(body)}
                     closed
                     fill={withAlpha(object.color || '#0e7490', 0.75)}
-                    stroke={isSelected ? '#16a34a' : '#0f172a'}
-                    strokeWidth={isSelected ? 2.5 : 1}
+                    stroke={isSelected ? '#16a34a' : isHighlighted ? '#dc2626' : '#0f172a'}
+                    strokeWidth={isSelected ? 2.5 : isHighlighted ? 2.5 : 1}
+                    dash={isHighlighted ? [6, 4] : undefined}
                   />
                   <Line
                     points={viewport.flatten([body[2], body[3]])}

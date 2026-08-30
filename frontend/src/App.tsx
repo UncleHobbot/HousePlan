@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Contour, Floor, Project } from '@houseplan/shared';
-import { api, type ProjectSummary } from './api';
+import type { AssistantCard, Contour, Floor, Project } from '@houseplan/shared';
+import {
+  applySnapshot,
+  createSnapshot,
+  diffPlacements,
+  livePlacements,
+} from '@houseplan/shared';
+import { api, type ImportCard, type ProjectSummary } from './api';
 import { FloorView } from './FloorView';
 import { RoomEditor } from './editor/RoomEditor';
 import { StockPanel } from './StockPanel';
@@ -121,6 +127,14 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
   const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
   const [editingShell, setEditingShell] = useState(false);
   const idCounters = useRef<Project['counters']>({});
+  const [snapName, setSnapName] = useState('');
+  const [snapNote, setSnapNote] = useState('');
+  const [compareWith, setCompareWith] = useState<number | null>(null);
+  const [importCards, setImportCards] = useState<ImportCard[] | null>(null);
+  const [notice, setNotice] = useState('');
+  function say(text: string) {
+    setNotice(text);
+  }
 
   useEffect(() => {
     api
@@ -200,6 +214,81 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
     }
   }
 
+  function rememberSnapshot() {
+    if (!project) return;
+    const name = snapName.trim() || `Вариант ${(project.counters.snapshot ?? 0) + 1}`;
+    const id = (project.counters.snapshot ?? 0) + 1;
+    update((p) => {
+      const snapshot = createSnapshot(p, id, name, snapNote.trim() || undefined);
+      p.counters.snapshot = id;
+      p.snapshots.push(snapshot);
+    });
+    setSnapName('');
+    setSnapNote('');
+    say(`Вариант «${name}» запомнен. Не забудьте сохранить изменения.`);
+  }
+
+  function restoreSnapshot(snapshotId: number) {
+    if (!project) return;
+    const snapshot = project.snapshots.find((s) => s.id === snapshotId);
+    if (!snapshot) return;
+    if (!window.confirm(`Вернуть вариант «${snapshot.name}»? Текущая расстановка будет перезаписана.`)) return;
+    const restored = applySnapshot(project, snapshot);
+    synchroniseCounters(restored);
+    idCounters.current = { ...restored.counters };
+    setProject(restored);
+    setDirty(true);
+    setActiveFloor((current) => (restored.floors.some((f) => f.id === current) ? current : restored.floors[0]?.id ?? null));
+    setCompareWith(null);
+    say(`Вариант «${snapshot.name}» возвращён в живой план.`);
+  }
+
+  function deleteSnapshot(snapshotId: number) {
+    if (!project) return;
+    update((p) => {
+      p.snapshots = p.snapshots.filter((s) => s.id !== snapshotId);
+    });
+    if (compareWith === snapshotId) setCompareWith(null);
+  }
+
+  function roomNameById(roomId: number): string {
+    for (const f of project?.floors ?? []) {
+      const room = f.rooms.find((r) => r.id === roomId);
+      if (room) return `${f.name}: ${room.name}`;
+    }
+    return '?';
+  }
+
+  async function checkImport() {
+    try {
+      setImportCards(await api.listImport());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function acceptImport(file: string) {
+    try {
+      const result = await api.acceptImport(file, name);
+      synchroniseCounters(result.project);
+      setProject(result.project);
+      setDirty(false);
+      setImportCards(await api.listImport());
+      say(`Объект «${result.object.name}» принят на склад с пометкой «не подтверждено».`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function rejectImport(file: string) {
+    try {
+      await api.rejectImport(file);
+      setImportCards(await api.listImport());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   if (error && !project) {
     return (
       <div className="page">
@@ -212,6 +301,13 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
 
   const floor = project.floors.find((f) => f.id === activeFloor) ?? null;
   const activeFloorIndex = floor ? project.floors.findIndex((f) => f.id === floor.id) : -1;
+  const highlightIds = (() => {
+    if (compareWith === null) return undefined;
+    const snapshot = project.snapshots.find((s) => s.id === compareWith);
+    if (!snapshot) return undefined;
+    const diff = diffPlacements(snapshot.placements, livePlacements(project));
+    return new Set([...diff.moved.map((m) => m.object.id), ...diff.added.map((p) => p.object.id)]);
+  })();
   const projectedZones = floor
     ? project.floors.flatMap((sourceFloor, sourceIndex) =>
         sourceFloor.id === floor.id
@@ -239,6 +335,73 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
         </button>
       </div>
       {error && <p className="error">{error}</p>}
+      {notice && <div className="banner ok">{notice}</div>}
+      <div className="card">
+        <h2>Варианты расстановки</h2>
+        <div className="row">
+          <input
+            placeholder="Название варианта"
+            value={snapName}
+            onChange={(e) => setSnapName(e.target.value)}
+            style={{ minWidth: 180 }}
+          />
+          <input
+            placeholder="Заметка (необязательно)"
+            value={snapNote}
+            onChange={(e) => setSnapNote(e.target.value)}
+            style={{ minWidth: 200 }}
+          />
+          <button className="primary" onClick={rememberSnapshot}>Запомнить вариант</button>
+        </div>
+        {project.snapshots.length > 0 && (
+          <ul className="locks">
+            {project.snapshots.map((s) => (
+              <li key={s.id}>
+                <span>
+                  <b>{s.name}</b>
+                  {s.note ? ` — ${s.note}` : ''}
+                  <span className="muted"> · объектов: {s.placements.length}</span>
+                </span>
+                <span className="row">
+                  <button onClick={() => restoreSnapshot(s.id)}>Вернуть</button>
+                  <button onClick={() => setCompareWith(compareWith === s.id ? null : s.id)}>
+                    {compareWith === s.id ? 'Скрыть сравнение' : 'Сравнить с планом'}
+                  </button>
+                  <button onClick={() => deleteSnapshot(s.id)}>Удалить</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {compareWith !== null &&
+          (() => {
+            const snapshot = project.snapshots.find((s) => s.id === compareWith);
+            if (!snapshot) return null;
+            const diff = diffPlacements(snapshot.placements, livePlacements(project));
+            return (
+              <div>
+                <p className="muted">Сравнение: «{snapshot.name}» → текущий план</p>
+                {diff.moved.length > 0 && (
+                  <p>
+                    <b>Переехало:</b>{' '}
+                    {diff.moved
+                      .map((m) => `${m.object.name} (${roomNameById(m.from.roomId)} → ${roomNameById(m.to.roomId)})`)
+                      .join('; ')}
+                  </p>
+                )}
+                {diff.added.length > 0 && (
+                  <p><b>Добавлено на план:</b> {diff.added.map((p) => p.object.name).join(', ')}</p>
+                )}
+                {diff.removed.length > 0 && (
+                  <p><b>Убрано с плана:</b> {diff.removed.map((p) => p.object.name).join(', ')}</p>
+                )}
+                {diff.moved.length + diff.added.length + diff.removed.length === 0 && (
+                  <p className="muted">Различий нет.</p>
+                )}
+              </div>
+            );
+          })()}
+      </div>
       <div className="row">
         {project.floors.map((f) => (
           <button
@@ -333,6 +496,7 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
                 floor={floor}
                 objects={project.objects}
                 projectedZones={projectedZones}
+                highlight={highlightIds}
                 onChangeFloor={(f) =>
                   update((p) => {
                     const placedHere = new Set(f.rooms.flatMap((room) => room.placements.map((placement) => placement.objectId)));
@@ -350,6 +514,10 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
               />
               <StockPanel
                 objects={project.objects}
+                importCards={importCards}
+                onCheckImport={checkImport}
+                onAcceptImport={acceptImport}
+                onRejectImport={rejectImport}
                 status={(objectId) => {
                   for (const f of project.floors) {
                     for (const r of f.rooms) {

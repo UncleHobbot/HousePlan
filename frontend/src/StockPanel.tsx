@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ObjectCategory, SceneObject } from '@houseplan/shared';
+import type { AssistantCard, ObjectCategory, SceneObject } from '@houseplan/shared';
 import { NO_CLEARANCE } from '@houseplan/shared';
 
 const CATEGORY_LABELS: Record<ObjectCategory, string> = {
@@ -21,6 +21,10 @@ const CATEGORY_LABELS: Record<ObjectCategory, string> = {
 export function StockPanel({
   objects,
   status,
+  importCards,
+  onCheckImport,
+  onAcceptImport,
+  onRejectImport,
   onCreate,
   onUpdate,
   onClone,
@@ -30,6 +34,11 @@ export function StockPanel({
   objects: SceneObject[];
   /** где объект: текст статуса для списка */
   status: (objectId: number) => string;
+  /** карточки в папке импорта (null — ещё не проверяли) */
+  importCards: Array<{ file: string; card: AssistantCard }> | null;
+  onCheckImport: () => void;
+  onAcceptImport: (file: string) => void;
+  onRejectImport: (file: string) => void;
   onCreate: (object: SceneObject) => void;
   onUpdate: (object: SceneObject) => void;
   onClone: (object: SceneObject) => void;
@@ -58,6 +67,32 @@ export function StockPanel({
   return (
     <div className="stock">
       <h2>Объекты (склад)</h2>
+      <div className="card">
+        <h3>Импорт от ассистента</h3>
+        <button onClick={onCheckImport}>Проверить импорт</button>
+        {importCards !== null && importCards.length === 0 && (
+          <p className="muted">Папка импорта пуста.</p>
+        )}
+        <ul className="locks">
+          {(importCards ?? []).map(({ file, card }) => (
+            <li key={file}>
+              <span>
+                <b>{card.name ?? file}</b>
+                <span className="muted">
+                  {' '}
+                  {card.source?.vendor ? `· ${card.source.vendor}` : ''}
+                  {card.source?.price_cad ? ` · ${card.source.price_cad} CAD` : ''}
+                  {card.source?.confidence === 'estimated' ? ' · оценка по фото' : ''}
+                </span>
+              </span>
+              <span className="row">
+                <button className="primary" onClick={() => onAcceptImport(file)}>Принять</button>
+                <button onClick={() => onRejectImport(file)}>Отклонить</button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
       <div className="card">
         <h3>Новый объект</h3>
         <div className="row">
@@ -95,6 +130,19 @@ export function StockPanel({
                 <span className="spacer" />
                 <span className="muted">{status(o.id)}</span>
               </div>
+              {o.unconfirmedImport && (
+                <div className="row">
+                  <span className="bad-text">из импорта — не подтверждено</span>
+                  <button onClick={() => onUpdate({ ...o, unconfirmedImport: false })}>Подтвердить</button>
+                </div>
+              )}
+              {(o.source?.vendor || o.source?.priceCad) && (
+                <p className="muted">
+                  источник: {o.source?.vendor}
+                  {o.source?.priceCad ? ` · ${o.source.priceCad} CAD` : ''}
+                  {o.source?.confidence === 'estimated' ? ' · размеры оценены по фото' : ''}
+                </p>
+              )}
               <div className="row">
                 <button onClick={() => onPlace(o.id)}>На план</button>
                 <button onClick={() => onClone(o)}>Копия</button>

@@ -4,7 +4,24 @@
 export * from './geometry.js';
 export * from './objects.js';
 export * from './openings.js';
+export * from './snapshots.js';
 export * from './zones.js';
+
+/** Карточка объекта от ассистента (AutoClaw) — формат папки `_import/`. */
+export interface AssistantCard {
+  name?: string;
+  category?: string;
+  size?: { w?: number; d?: number; h?: number };
+  color?: string;
+  images?: string[];
+  clearance?: { front?: number; back?: number };
+  source?: {
+    vendor?: string;
+    url?: string;
+    price_cad?: number;
+    confidence?: string;
+  };
+}
 
 /** Версия формата файла плана (внешний контракт — ADR 0005). */
 export const FORMAT_VERSION = 1;
