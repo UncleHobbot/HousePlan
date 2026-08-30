@@ -55,6 +55,7 @@ export function RoomEditor({ plan, allocateId, onChange, onDone }: RoomEditorPro
           onPointerLeave={session.onPointerLeave}
           onClick={session.onCanvasClick}
           onPointerDown={session.onCanvasPointerDown}
+          onContextMenu={session.onCanvasContextMenu}
         />
       </div>
       {session.banner && <div className={`banner ${session.banner.kind}`}>{session.banner.text}</div>}

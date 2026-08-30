@@ -166,6 +166,33 @@ app.put('/api/projects/:name', asyncHandler(async (req, res) => {
   }
 }));
 
+app.post('/api/projects/:name/rename', asyncHandler(async (req, res) => {
+  const newName = String(req.body?.name ?? '').trim();
+  let newDir: string;
+  try {
+    newDir = projectDir(newName);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'плохое имя' });
+    return;
+  }
+  if (newName === req.params.name) {
+    res.json({ ok: true, name: newName });
+    return;
+  }
+  const project = await readProject(req.params.name);
+  try {
+    await fs.access(newDir);
+    res.status(409).json({ error: 'проект с таким названием уже существует' });
+    return;
+  } catch {
+    // папки нет — можно переименовывать
+  }
+  await fs.rename(projectDir(req.params.name), newDir);
+  project.name = newName;
+  await writeProject(project);
+  res.json({ ok: true, name: newName, project });
+}));
+
 // ---------- импорт карточек от ассистента (папка _import/) ----------
 
 const CATEGORIES: ObjectCategory[] = [

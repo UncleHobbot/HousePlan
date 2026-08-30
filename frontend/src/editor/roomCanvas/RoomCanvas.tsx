@@ -24,6 +24,7 @@ export interface RoomCanvasProps {
   onPointerLeave: () => void;
   onClick: (event: CanvasPointerEvent) => void;
   onPointerDown: (event: CanvasPointerEvent) => void;
+  onContextMenu: (event: CanvasPointerEvent) => void;
 }
 
 function doorArc(
@@ -95,7 +96,11 @@ export function RoomCanvas(props: RoomCanvasProps) {
   });
 
   return (
-    <div className={props.invalid ? 'plan bad' : 'plan'} style={{ cursor: props.cursor, overflow: 'hidden' }}>
+    <div
+      className={props.invalid ? 'plan bad' : 'plan'}
+      style={{ cursor: props.cursor, overflow: 'hidden' }}
+      onContextMenu={(event) => event.preventDefault()}
+    >
       <Stage
         width={WIDTH}
         height={HEIGHT}
@@ -104,6 +109,11 @@ export function RoomCanvas(props: RoomCanvasProps) {
         onClick={(event) => {
           if (event.target === event.target.getStage()) {
             props.onClick({ position: pointerPosition(event.target.getStage()!), target: { kind: 'canvas' } });
+          }
+        }}
+        onContextMenu={(event) => {
+          if (event.target === event.target.getStage()) {
+            props.onContextMenu({ position: pointerPosition(event.target.getStage()!), target: { kind: 'canvas' } });
           }
         }}
         onMouseDown={(event) => {
@@ -190,6 +200,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
                 dash={diagonal ? [8, 6] : undefined}
                 hitStrokeWidth={20}
                 onClick={semanticHandler({ kind: 'wall', wallIndex: index }, props.onClick)}
+                onContextMenu={semanticHandler({ kind: 'wall', wallIndex: index }, props.onContextMenu)}
                 onMouseDown={semanticHandler({ kind: 'wall', wallIndex: index }, props.onPointerDown)}
               />
             );
@@ -247,6 +258,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
                   hitStrokeWidth={12}
                   onMouseDown={semanticHandler({ kind: 'point', pointId: point.id }, props.onPointerDown)}
                   onClick={semanticHandler({ kind: 'point', pointId: point.id }, props.onClick)}
+                  onContextMenu={semanticHandler({ kind: 'point', pointId: point.id }, props.onContextMenu)}
                 />
                 <Text x={canvas.x + 10} y={canvas.y - 22} text={`А${point.id}`} fontSize={13} fontStyle="bold" fill="#0f172a" listening={false} />
               </Fragment>

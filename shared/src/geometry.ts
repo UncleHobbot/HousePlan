@@ -165,3 +165,56 @@ export function chainInfo(contour: Contour, aId: number, bId: number): ChainInfo
 export function removeLock(contour: Contour, aId: number, bId: number): Contour {
   return { ...contour, locks: contour.locks.filter((l) => l.aId !== aId || l.bId !== bId) };
 }
+
+export interface PointDeletionPreview {
+  ok: boolean;
+  reason?: string;
+  /** индекс удаляемой точки */
+  index: number;
+  /** замки, исчезающие вместе с соседними стенами */
+  locks: SizeLock[];
+  /** стены с исчезающими проёмами: идентификаторы их начальных точек */
+  openingWallPointIds: number[];
+}
+
+/**
+ * Что удалится вместе с точкой: две соседние стены сливаются в одну,
+ * замки на них исчезают, проёмы исчезнувшей стены удаляются.
+ */
+export function pointDeletionPreview(contour: Contour, pointId: number): PointDeletionPreview {
+  const empty = { index: -1, locks: [] as SizeLock[], openingWallPointIds: [] as number[] };
+  const points = contour.points;
+  const n = points.length;
+  if (!contour.closed || n < 3) {
+    return { ...empty, ok: false, reason: 'Контур не замкнут.' };
+  }
+  const index = idxOf(points, pointId);
+  if (index < 0) return { ...empty, ok: false, reason: 'Точка не найдена.' };
+  if (n <= 3) {
+    return { ...empty, ok: false, reason: 'В контуре должно остаться минимум три угла.' };
+  }
+  const prev = (index - 1 + n) % n;
+  const locks = contour.locks.filter((lock) => {
+    const walls = chainWalls(points, lock.aId, lock.bId);
+    return walls ? walls.some((w) => w === prev || w === index) : false;
+  });
+  return {
+    ok: true,
+    index,
+    locks,
+    openingWallPointIds: [points[index].id],
+  };
+}
+
+/** Удалить точку: соседние стены сливаются в одну, их замки исчезают. */
+export function deletePoint(contour: Contour, pointId: number): Contour {
+  const preview = pointDeletionPreview(contour, pointId);
+  if (!preview.ok) return contour;
+  const points = contour.points;
+  const gone = new Set(preview.locks.map(lockLabel));
+  return {
+    ...contour,
+    points: points.filter((_, i) => i !== preview.index),
+    locks: contour.locks.filter((lock) => !gone.has(lockLabel(lock))),
+  };
+}

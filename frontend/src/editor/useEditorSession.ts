@@ -3,7 +3,10 @@ import {
   canSlide,
   chainInfo,
   crossings,
+  deletePoint,
+  lockLabel,
   NO_CLEARANCE,
+  pointDeletionPreview,
   rebaseOpenings,
   rebaseZones,
   slidePoint,
@@ -325,6 +328,30 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
     }
   }
 
+  /** Правый клик: удалить точку (стены сливаются) или стену (удаляется её точка). */
+  function onCanvasContextMenu(event: CanvasPointerEvent) {
+    if (!contour.closed || zoneMode !== 'none' || openingMode !== null) return;
+    let pointId: number;
+    if (event.target.kind === 'point') pointId = event.target.pointId;
+    else if (event.target.kind === 'wall') pointId = points[event.target.wallIndex].id;
+    else return;
+    const preview = pointDeletionPreview(contour, pointId);
+    if (!preview.ok) return say('info', preview.reason ?? 'Эту точку удалить нельзя.');
+    const details: string[] = [];
+    if (preview.locks.length > 0) {
+      details.push(`замки: ${preview.locks.map(lockLabel).join(', ')}`);
+    }
+    if (preview.openingWallPointIds.length > 0) {
+      details.push(`проёмы на этой стене: ${plan.openings.filter((o) => preview.openingWallPointIds.includes(o.wallPointId)).map((o) => OPENING_LABELS[o.kind]).join(', ') || '—'}`);
+    }
+    const extra = details.length > 0 ? ` Вместе с ней удалятся: ${details.join('; ')}.` : '';
+    if (!window.confirm(`Удалить точку А${pointId}? Две соседние стены сольются в одну.${extra}`)) return;
+    applyContour(deletePoint(contour, pointId));
+    emit({ openings: plan.openings.filter((o) => !preview.openingWallPointIds.includes(o.wallPointId)) });
+    resetSelection();
+    say('info', 'Точка удалена — стены соединились в одну.');
+  }
+
   function onPointerMove(position: { x: number; y: number }) {
     setPointer(position);
     if (slideRef.current !== null) {
@@ -392,6 +419,7 @@ export function useEditorSession({ plan, allocateId, onChange }: Pick<RoomEditor
     hasDiagonals,
     onCanvasClick,
     onCanvasPointerDown,
+    onCanvasContextMenu,
     onPointerMove,
     onPointerLeave() { setPointer(null); },
     pinDimension,

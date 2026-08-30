@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AssistantCard, Contour, Floor, Project } from '@houseplan/shared';
+import type { AssistantCard, Contour, Floor, Project, Room } from '@houseplan/shared';
 import {
   applySnapshot,
   createSnapshot,
@@ -77,6 +77,7 @@ export function App() {
     return (
       <ProjectPage
         name={openName}
+        onRenamed={(newName) => setOpenName(newName)}
         onExit={() => {
           setOpenName(null);
           refresh();
@@ -119,7 +120,7 @@ export function App() {
   );
 }
 
-function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
+function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => void; onRenamed: (newName: string) => void }) {
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState('');
   const [activeFloor, setActiveFloor] = useState<number | null>(null);
@@ -132,6 +133,13 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
   const [compareWith, setCompareWith] = useState<number | null>(null);
   const [importCards, setImportCards] = useState<ImportCard[] | null>(null);
   const [notice, setNotice] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const historyRef = useRef<Project[]>([]);
+  const redoRef = useRef<Project[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
   function say(text: string) {
     setNotice(text);
   }
@@ -148,7 +156,17 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [name]);
 
+  function pushHistory() {
+    if (!project) return;
+    historyRef.current.push(project);
+    if (historyRef.current.length > 50) historyRef.current.shift();
+    redoRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }
+
   function update(change: (p: Project) => void) {
+    pushHistory();
     setDirty(true);
     setProject((current) => {
       if (!current) return current;
@@ -160,6 +178,48 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
       return copy;
     });
   }
+
+  function undo() {
+    const previous = historyRef.current.pop();
+    if (!previous || !project) return;
+    redoRef.current.push(project);
+    synchroniseCounters(previous);
+    idCounters.current = { ...previous.counters };
+    setProject(previous);
+    setDirty(true);
+    setCanUndo(historyRef.current.length > 0);
+    setCanRedo(true);
+    say('Действие отменено.');
+  }
+
+  function redo() {
+    const next = redoRef.current.pop();
+    if (!next || !project) return;
+    historyRef.current.push(project);
+    synchroniseCounters(next);
+    idCounters.current = { ...next.counters };
+    setProject(next);
+    setDirty(true);
+    setCanUndo(true);
+    setCanRedo(redoRef.current.length > 0);
+    say('Действие возвращено.');
+  }
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        undo();
+      } else if ((key === 'z' && event.shiftKey) || key === 'y') {
+        event.preventDefault();
+        redo();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   function allocateId(kind: ProjectIdKind): number {
     const id = (idCounters.current[kind] ?? 0) + 1;
@@ -233,6 +293,7 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
     const snapshot = project.snapshots.find((s) => s.id === snapshotId);
     if (!snapshot) return;
     if (!window.confirm(`Вернуть вариант «${snapshot.name}»? Текущая расстановка будет перезаписана.`)) return;
+    pushHistory();
     const restored = applySnapshot(project, snapshot);
     synchroniseCounters(restored);
     idCounters.current = { ...restored.counters };
@@ -249,6 +310,56 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
       p.snapshots = p.snapshots.filter((s) => s.id !== snapshotId);
     });
     if (compareWith === snapshotId) setCompareWith(null);
+  }
+
+  function deleteFloor() {
+    if (!project || !floor) return;
+    const placed = floor.rooms.reduce((sum, r) => sum + r.placements.length, 0);
+    const message =
+      `Удалить этаж «${floor.name}»? Помещений: ${floor.rooms.length}.` +
+      (placed > 0 ? ` Объектов на этаже: ${placed} — они вернутся на склад.` : '');
+    if (!window.confirm(message)) return;
+    update((p) => {
+      p.floors = p.floors.filter((f) => f.id !== floor.id);
+    });
+    const remaining = project.floors.find((f) => f.id !== floor.id);
+    setActiveFloor(remaining ? remaining.id : null);
+    say(`Этаж «${floor.name}» удалён.`);
+  }
+
+  function deleteRoom(room: Room) {
+    if (!project || !floor) return;
+    const placed = room.placements.length;
+    const message =
+      `Удалить помещение «${room.name}»? Зоны и двери помещения удалятся.` +
+      (placed > 0 ? ` Объектов в нём: ${placed} — они вернутся на склад.` : '');
+    if (!window.confirm(message)) return;
+    update((p) => {
+      const f = p.floors.find((f) => f.id === floor.id);
+      if (f) f.rooms = f.rooms.filter((r) => r.id !== room.id);
+    });
+    if (editingRoomId === room.id) setEditingRoomId(null);
+    say(`Помещение «${room.name}» удалено.`);
+  }
+
+  async function renameProject() {
+    const newName = newProjectName.trim();
+    if (!newName || newName === name) {
+      setRenaming(false);
+      return;
+    }
+    try {
+      const result = await api.renameProject(name, newName);
+      synchroniseCounters(result.project);
+      idCounters.current = { ...result.project.counters };
+      setProject(result.project);
+      setDirty(false);
+      setRenaming(false);
+      onRenamed(newName);
+      say(`Проект переименован в «${newName}».`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   function roomNameById(roomId: number): string {
@@ -270,6 +381,11 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
   async function acceptImport(file: string) {
     try {
       const result = await api.acceptImport(file, name);
+      // состояние менял сервер — локальная история отмены сбрасывается
+      historyRef.current = [];
+      redoRef.current = [];
+      setCanUndo(false);
+      setCanRedo(false);
       synchroniseCounters(result.project);
       setProject(result.project);
       setDirty(false);
@@ -329,7 +445,22 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
       <div className="row">
         <button onClick={onExit}>← Каталог</button>
         <h1>{project.name}</h1>
+        <button onClick={() => { setNewProjectName(project.name); setRenaming(true); }}>Переименовать</button>
+        {renaming && (
+          <>
+            <input
+              autoFocus
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              style={{ minWidth: 160 }}
+            />
+            <button className="primary" onClick={renameProject}>ОК</button>
+            <button onClick={() => setRenaming(false)}>✕</button>
+          </>
+        )}
         <span className="spacer" />
+        <button onClick={undo} disabled={!canUndo} title="Ctrl+Z">⟲ Отменить</button>
+        <button onClick={redo} disabled={!canRedo} title="Ctrl+Y">⟳ Вернуть</button>
         <button onClick={save} disabled={!dirty}>
           {dirty ? 'Сохранить изменения' : 'Сохранено'}
         </button>
@@ -466,12 +597,22 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
         ) : (
           <>
             <div className="row">
-              <b>{floor.name}</b>
+              <input
+                value={floor.name}
+                title="Имя этажа"
+                style={{ width: 160, fontWeight: 700 }}
+                onChange={(e) =>
+                  update((p) => {
+                    p.floors.find((f) => f.id === floor.id)!.name = e.target.value;
+                  })
+                }
+              />
               <span className="muted">потолок: {floor.ceilingHeightCm} см</span>
               <button onClick={() => setEditingShell(true)}>
                 {floor.shell.contour.closed ? 'Редактировать оболочку' : 'Нарисовать оболочку'}
               </button>
               <button onClick={() => startDrawingRoom(floor)}>+ Нарисовать помещение</button>
+              <button onClick={deleteFloor}>Удалить этаж</button>
             </div>
             {floor.rooms.length === 0 ? (
               <p className="muted">На этаже пока нет помещений. Нажмите «Нарисовать помещение».</p>
@@ -480,12 +621,25 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
                 {floor.rooms.map((r) => (
                   <li key={r.id}>
                     <span className="row">
-                      {r.name} — {r.contour.closed ? `${r.contour.points.length} углов` : 'недорисовано'}
+                      <input
+                        value={r.name}
+                        title="Имя помещения"
+                        style={{ width: 140 }}
+                        onChange={(e) =>
+                          update((p) => {
+                            const f = p.floors.find((f2) => f2.id === floor.id)!;
+                            const target = f.rooms.find((r2) => r2.id === r.id)!;
+                            target.name = e.target.value;
+                          })
+                        }
+                      />
+                      — {r.contour.closed ? `${r.contour.points.length} углов` : 'недорисовано'}
                       {', объектов: '}
                       {r.placements.length}
                       <button onClick={() => setEditingRoomId(r.id)}>
                         {r.contour.closed ? 'Редактировать' : 'Продолжить рисование'}
                       </button>
+                      <button onClick={() => deleteRoom(r)}>Удалить</button>
                     </span>
                   </li>
                 ))}

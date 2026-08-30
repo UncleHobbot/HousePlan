@@ -7,6 +7,8 @@ import {
   crossings,
   removeLock,
   slidePoint,
+  pointDeletionPreview,
+  deletePoint,
   lockedWalls,
 } from '../src/geometry.js';
 
@@ -89,4 +91,42 @@ test('снятие замка возвращает свободу', () => {
   assert.equal(canSlide(c, 5).ok, false);
   const unlocked = removeLock(c, 1, 5);
   assert.equal(canSlide(unlocked, 5).ok, true);
+});
+
+test('удаление угла: соседний замок исчезает, дальний остаётся', () => {
+  const c = rect();
+  c.locks.push(
+    { aId: 1, bId: 2, length: 600 },
+    { aId: 3, bId: 4, length: 600 },
+  );
+  const preview = pointDeletionPreview(c, 1);
+  assert.equal(preview.ok, true);
+  assert.equal(preview.locks.length, 1, 'исчезает только замок на соседней стене');
+  assert.equal(preview.locks[0].aId, 1);
+  assert.equal(preview.openingWallPointIds[0], 1);
+  const next = deletePoint(c, 1);
+  assert.equal(next.points.length, 3);
+  assert.equal(next.closed, true);
+  assert.equal(next.locks.length, 1);
+  assert.equal(next.locks[0].bId, 4, 'дальний замок сохранился');
+  // контур по-прежнему сходится: сумма векторов нулевая
+  let dx = 0, dy = 0;
+  const n = next.points.length;
+  for (let i = 0; i < n; i++) {
+    const a = next.points[i], b = next.points[(i + 1) % n];
+    dx += b.x - a.x;
+    dy += b.y - a.y;
+  }
+  assert.deepEqual({ dx, dy }, { dx: 0, dy: 0 });
+});
+
+test('в контуре из трёх точек угол удалить нельзя', () => {
+  const preview = pointDeletionPreview(rect(), 1);
+  assert.equal(preview.ok, true);
+  const tiny: Contour = {
+    points: rect().points.slice(0, 3),
+    thicknesses: {}, locks: [], closed: true,
+  };
+  assert.equal(pointDeletionPreview(tiny, 1).ok, false);
+  assert.equal(deletePoint(tiny, 1).points.length, 3, 'удаление не применяется');
 });

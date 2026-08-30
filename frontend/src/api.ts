@@ -33,6 +33,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(project),
     }),
+  renameProject: (name: string, newName: string) =>
+    request<{ ok: true; name: string; project: Project }>(`/api/projects/${encodeURIComponent(name)}/rename`, {
+      method: 'POST',
+      body: JSON.stringify({ name: newName }),
+    }),
   listImport: () => request<ImportCard[]>('/api/import'),
   acceptImport: (file: string, projectName: string) =>
     request<{ project: Project; object: SceneObject }>('/api/import/accept', {
