@@ -43,7 +43,29 @@ async function readProject(name: string): Promise<Project> {
 async function writeProject(project: Project): Promise<void> {
   const dir = projectDir(project.name);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, 'план.json'), JSON.stringify(project, null, 2), 'utf8');
+  const target = path.join(dir, 'план.json');
+  const temporary = path.join(dir, `.план-${process.pid}-${Date.now()}.tmp`);
+  try {
+    await fs.writeFile(temporary, JSON.stringify(project, null, 2), 'utf8');
+    await fs.rename(temporary, target);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+function isProject(value: unknown): value is Project {
+  if (typeof value !== 'object' || value === null) return false;
+  const project = value as Partial<Project>;
+  return (
+    project.formatVersion === FORMAT_VERSION &&
+    typeof project.name === 'string' &&
+    Array.isArray(project.floors) &&
+    Array.isArray(project.objects) &&
+    Array.isArray(project.snapshots) &&
+    typeof project.counters === 'object' &&
+    project.counters !== null
+  );
 }
 
 const app = express();
@@ -51,7 +73,7 @@ app.use(express.json({ limit: '10mb' }));
 
 /** Обёртка: ошибка в обработчике не должна ронять весь сервер. */
 type Handler = (req: express.Request, res: express.Response) => Promise<void>;
-function h(handler: Handler): express.RequestHandler {
+function asyncHandler(handler: Handler): express.RequestHandler {
   return (req, res) => {
     handler(req, res).catch((error) => {
       const message = error instanceof Error ? error.message : 'внутренняя ошибка';
@@ -64,7 +86,7 @@ app.get('/api/version', (_req, res) => {
   res.json({ formatVersion: FORMAT_VERSION });
 });
 
-app.get('/api/projects', h(async (_req, res) => {
+app.get('/api/projects', asyncHandler(async (_req, res) => {
   await ensureDataDirs();
   const entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
   const projects = [];
@@ -80,7 +102,7 @@ app.get('/api/projects', h(async (_req, res) => {
   res.json(projects);
 }));
 
-app.post('/api/projects', h(async (req, res) => {
+app.post('/api/projects', asyncHandler(async (req, res) => {
   const name = String(req.body?.name ?? '').trim();
   if (!name) {
     res.status(400).json({ error: 'укажите название проекта' });
@@ -101,12 +123,20 @@ app.post('/api/projects', h(async (req, res) => {
     snapshots: [],
     counters: {},
   };
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, 'план.json'), JSON.stringify(project, null, 2), 'utf8');
+  try {
+    await fs.mkdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      res.status(409).json({ error: 'проект с таким названием уже существует' });
+      return;
+    }
+    throw error;
+  }
+  await fs.writeFile(path.join(dir, 'план.json'), JSON.stringify(project, null, 2), { encoding: 'utf8', flag: 'wx' });
   res.status(201).json(project);
 }));
 
-app.get('/api/projects/:name', h(async (req, res) => {
+app.get('/api/projects/:name', asyncHandler(async (req, res) => {
   try {
     res.json(await readProject(req.params.name));
   } catch (error) {
@@ -114,9 +144,13 @@ app.get('/api/projects/:name', h(async (req, res) => {
   }
 }));
 
-app.put('/api/projects/:name', h(async (req, res) => {
+app.put('/api/projects/:name', asyncHandler(async (req, res) => {
   try {
-    const project = req.body as Project;
+    if (!isProject(req.body)) {
+      res.status(400).json({ error: 'файл проекта не соответствует формату' });
+      return;
+    }
+    const project = req.body;
     if (project.name !== req.params.name) {
       res.status(400).json({ error: 'имя проекта не совпадает' });
       return;

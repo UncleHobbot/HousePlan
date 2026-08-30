@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Contour, Floor, Project } from '@houseplan/shared';
 import { api, type ProjectSummary } from './api';
 import { FloorView } from './FloorView';
@@ -9,6 +9,31 @@ function bboxArea(c: Contour): number {
   const xs = c.points.map((p) => p.x);
   const ys = c.points.map((p) => p.y);
   return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+}
+
+type ProjectIdKind = keyof Project['counters'];
+
+function synchroniseCounters(project: Project): void {
+  const ids: Record<ProjectIdKind, number[]> = {
+    floor: [], room: [], point: [], opening: [], zone: [], object: [], snapshot: [],
+  };
+  for (const floor of project.floors) {
+    ids.floor.push(floor.id);
+    ids.point.push(...floor.shell.contour.points.map((point) => point.id));
+    ids.opening.push(...floor.shell.openings.map((opening) => opening.id));
+    for (const room of floor.rooms) {
+      ids.room.push(room.id);
+      ids.point.push(...room.contour.points.map((point) => point.id));
+      ids.opening.push(...room.openings.map((opening) => opening.id));
+      ids.zone.push(...room.zones.map((zone) => zone.id));
+      ids.point.push(...room.zones.flatMap((zone) => zone.points.map((point) => point.id)));
+    }
+  }
+  ids.object.push(...project.objects.map((object) => object.id));
+  ids.snapshot.push(...project.snapshots.map((snapshot) => snapshot.id));
+  for (const kind of Object.keys(ids) as ProjectIdKind[]) {
+    project.counters[kind] = Math.max(project.counters[kind] ?? 0, 0, ...ids[kind]);
+  }
 }
 
 export function App() {
@@ -95,11 +120,14 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
   const [dirty, setDirty] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
   const [editingShell, setEditingShell] = useState(false);
+  const idCounters = useRef<Project['counters']>({});
 
   useEffect(() => {
     api
       .readProject(name)
       .then((p) => {
+        synchroniseCounters(p);
+        idCounters.current = { ...p.counters };
         setProject(p);
         setActiveFloor(p.floors[0]?.id ?? null);
       })
@@ -107,13 +135,22 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
   }, [name]);
 
   function update(change: (p: Project) => void) {
+    setDirty(true);
     setProject((current) => {
       if (!current) return current;
       const copy = structuredClone(current);
       change(copy);
-      setDirty(true);
+      for (const kind of ['point', 'opening', 'zone'] as const) {
+        copy.counters[kind] = Math.max(copy.counters[kind] ?? 0, idCounters.current[kind] ?? 0);
+      }
       return copy;
     });
+  }
+
+  function allocateId(kind: ProjectIdKind): number {
+    const id = (idCounters.current[kind] ?? 0) + 1;
+    idCounters.current[kind] = id;
+    return id;
   }
 
   function addFloor() {
@@ -121,11 +158,14 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
     update((p) => {
       const id = (p.counters.floor ?? 0) + 1;
       p.counters.floor = id;
+      const neighbour = p.floors.find((floor) => floor.id === activeFloor) ?? p.floors[p.floors.length - 1];
       p.floors.push({
         id,
         name: `${p.floors.length + 1}-й этаж`,
         ceilingHeightCm: 260,
-        shell: { contour: { points: [], thicknesses: {}, locks: [], closed: false }, openings: [] },
+        shell: neighbour
+          ? structuredClone(neighbour.shell)
+          : { contour: { points: [], thicknesses: {}, locks: [], closed: false }, openings: [] },
         rooms: [],
       });
       setActiveFloor(id);
@@ -171,6 +211,22 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
   if (!project) return <p className="page">Загрузка…</p>;
 
   const floor = project.floors.find((f) => f.id === activeFloor) ?? null;
+  const activeFloorIndex = floor ? project.floors.findIndex((f) => f.id === floor.id) : -1;
+  const projectedZones = floor
+    ? project.floors.flatMap((sourceFloor, sourceIndex) =>
+        sourceFloor.id === floor.id
+          ? []
+          : sourceFloor.rooms.flatMap((room) =>
+              room.zones.filter((zone) => {
+                if (!zone.spansFloors) return false;
+                const from = project.floors.findIndex((f) => f.id === zone.spansFloors!.fromFloorId);
+                const to = project.floors.findIndex((f) => f.id === zone.spansFloors!.toFloorId);
+                if (from < 0 || to < 0) return false;
+                return activeFloorIndex >= Math.min(from, to) && activeFloorIndex <= Math.max(from, to) && sourceIndex !== activeFloorIndex;
+              }),
+            ),
+      )
+    : [];
 
   return (
     <div className="page">
@@ -206,6 +262,7 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
             floorId={floor.id}
             shellMode
             openingKinds={['window', 'entryDoor']}
+            allocateId={allocateId}
             onChangeContour={(c) =>
               update((p) => {
                 p.floors.find((f) => f.id === floor.id)!.shell.contour = c;
@@ -232,6 +289,7 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
                 floorId={floor.id}
                 shellMode={false}
                 openingKinds={['innerDoor']}
+                allocateId={allocateId}
                 onChangeContour={(c) =>
                   update((p) => {
                     const f = p.floors.find((f) => f.id === floor.id)!;
@@ -289,9 +347,19 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
               <FloorView
                 floor={floor}
                 objects={project.objects}
+                projectedZones={projectedZones}
                 onChangeFloor={(f) =>
                   update((p) => {
-                    p.floors.find((f2) => f2.id === floor.id)!.rooms = f.rooms;
+                    const placedHere = new Set(f.rooms.flatMap((room) => room.placements.map((placement) => placement.objectId)));
+                    for (const projectFloor of p.floors) {
+                      if (projectFloor.id === floor.id) {
+                        projectFloor.rooms = f.rooms;
+                      } else {
+                        for (const room of projectFloor.rooms) {
+                          room.placements = room.placements.filter((placement) => !placedHere.has(placement.objectId));
+                        }
+                      }
+                    }
                   })
                 }
               />
@@ -342,7 +410,11 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
                     if (!room) return;
                     const cx = Math.round(room.contour.points.reduce((a, pt) => a + pt.x, 0) / room.contour.points.length);
                     const cy = Math.round(room.contour.points.reduce((a, pt) => a + pt.y, 0) / room.contour.points.length);
-                    room.placements = room.placements.filter((pl) => pl.objectId !== objectId);
+                    for (const projectFloor of p.floors) {
+                      for (const projectRoom of projectFloor.rooms) {
+                        projectRoom.placements = projectRoom.placements.filter((pl) => pl.objectId !== objectId);
+                      }
+                    }
                     room.placements.push({ objectId, roomId: room.id, x: cx, y: cy, rotationDeg: 0 });
                   })
                 }

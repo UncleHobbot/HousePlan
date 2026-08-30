@@ -79,7 +79,14 @@ export function StockPanel({
       <ul className="cards">
         {objects.map((o) => (
           <li key={o.id}>
-            <div className="card">
+            <div
+              className="card"
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData('text/objectid', String(o.id));
+                event.dataTransfer.effectAllowed = 'move';
+              }}
+            >
               <div className="row">
                 <b>{o.name}</b>
                 <span className="muted">

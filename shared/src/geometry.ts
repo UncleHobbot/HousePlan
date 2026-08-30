@@ -169,14 +169,6 @@ export function chainInfo(contour: Contour, aId: number, bId: number): ChainInfo
   const n = points.length;
   if (!contour.closed || n < 3) return { ok: false, reason: 'Контур не замкнут.' };
   if (aId === bId) return { ok: false, reason: 'Выберите две разные точки.' };
-  for (let w = 0; w < n; w++) {
-    if (axisOf(vec(points, w)) === 'D') {
-      return {
-        ok: false,
-        reason: 'В контуре есть диагональная стена. Размеры прибиваются только по прямым углам — включите прилипание и исправьте контур.',
-      };
-    }
-  }
   const walls = chainWalls(points, aId, bId);
   if (!walls || walls.length === 0) return { ok: false, reason: 'Выберите две разные точки.' };
   const first = vec(points, walls[0]);
@@ -225,6 +217,14 @@ export function tryLock(
   const axis = info.axis;
   const sign = (w: number) => signOf(vec(points, w));
 
+  if (target < walls.length * MIN) {
+    return {
+      ok: false,
+      reason: `На участке ${walls.length} частей, каждая должна быть не короче ${MIN} см.`,
+      conflicts: [],
+    };
+  }
+
   // 1) участок растягивается пропорционально
   const newLen: Cm[] = Array.from({ length: n }, (_, i) => wallLength(points, i));
   scaledWithSum(walls.map((w) => newLen[w]), target).forEach((v, k) => {
@@ -235,7 +235,17 @@ export function tryLock(
   const busy = lockedWalls(contour);
   const sameAxis: number[] = [];
   for (let w = 0; w < n; w++) if (axisOf(vec(points, w)) === axis) sameAxis.push(w);
-  const R = sameAxis.reduce((acc, w) => acc + sign(w) * newLen[w], 0);
+  const axisDelta = (w: number, length: number): number => {
+    const v = vec(points, w);
+    const wallAxis = axisOf(v);
+    if (wallAxis === 'D') return axis === 'H' ? v.dx : v.dy;
+    if (wallAxis !== axis) return 0;
+    return sign(w) * length;
+  };
+  const R = Array.from({ length: n }, (_, w) => w).reduce(
+    (acc, w) => acc + axisDelta(w, newLen[w]),
+    0,
+  );
   if (R !== 0) {
     const free = sameAxis.filter((w) => !walls.includes(w) && !busy.has(w));
     const den = free.reduce((acc, w) => acc + sign(w) * newLen[w], 0);
@@ -252,9 +262,9 @@ export function tryLock(
     const t = -R / den;
     const reb = free.map((w) => Math.round(newLen[w] * (1 + t)));
     const signedTotal = () =>
-      sameAxis.reduce((acc, w) => {
+      Array.from({ length: n }, (_, w) => w).reduce((acc, w) => {
         const k = free.indexOf(w);
-        return acc + sign(w) * (k >= 0 ? reb[k] : newLen[w]);
+        return acc + axisDelta(w, k >= 0 ? reb[k] : newLen[w]);
       }, 0);
     let need = signedTotal();
     let guard = 0;

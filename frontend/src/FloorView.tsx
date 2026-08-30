@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import type { Floor, SceneObject } from '@houseplan/shared';
+import type { Floor, SceneObject, Zone } from '@houseplan/shared';
 import {
   bodyPolygon,
   clearancePolygon,
@@ -24,10 +24,12 @@ const ZONE_COLORS: Record<string, string> = {
 export function FloorView({
   floor,
   objects,
+  projectedZones,
   onChangeFloor,
 }: {
   floor: Floor;
   objects: SceneObject[];
+  projectedZones?: Zone[];
   onChangeFloor: (floor: Floor) => void;
 }) {
   const [selected, setSelected] = useState<number | null>(null);
@@ -35,7 +37,7 @@ export function FloorView({
   const dragRef = useRef<{ objectId: number; dx: number; dy: number } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  const zones = floor.rooms.flatMap((r) => r.zones);
+  const zones = [...floor.rooms.flatMap((r) => r.zones), ...(projectedZones ?? [])];
   const conflicts = conflictObjectIds(objects, floor, zones);
   const byId = new Map(objects.map((o) => [o.id, o]));
 
@@ -136,7 +138,13 @@ export function FloorView({
       ...floor,
       rooms: floor.rooms.map((r) =>
         r.id === roomId
-          ? { ...r, placements: [...r.placements, { objectId, roomId, x: Math.round(p.x), y: Math.round(p.y), rotationDeg: 0 }] }
+          ? {
+              ...r,
+              placements: [
+                ...r.placements.filter((placement) => placement.objectId !== objectId),
+                { objectId, roomId, x: Math.round(p.x), y: Math.round(p.y), rotationDeg: 0 },
+              ],
+            }
           : { ...r, placements: r.placements.filter((pl) => pl.objectId !== objectId) },
       ),
     });
@@ -180,13 +188,13 @@ export function FloorView({
         {/* сетки нет: обзор этажа */}
 
         {/* зоны */}
-        {zones.map((z) => {
+        {zones.map((z, zoneIndex) => {
           const color = ZONE_COLORS[z.kind] ?? '#ca8a04';
           const d = z.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${X(p.x)} ${Y(p.y)}`).join(' ') + ' Z';
           const cx = z.points.reduce((a, p) => a + p.x, 0) / z.points.length;
           const cy = z.points.reduce((a, p) => a + p.y, 0) / z.points.length;
           return (
-            <g key={z.id}>
+            <g key={`${z.id}-${zoneIndex}`}>
               <path d={d} fill={color} fillOpacity={0.3} stroke={color} strokeWidth={2} />
               <text x={X(cx) + 4} y={Y(cy) - 4} fontSize={12} fill={color} fontWeight={700}>
                 {z.name}

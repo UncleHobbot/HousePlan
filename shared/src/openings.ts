@@ -32,7 +32,7 @@ export function openingSegment(
   if (!wall) return null;
   const vx = wall.b.x - wall.a.x;
   const vy = wall.b.y - wall.a.y;
-  const len = Math.abs(vx) + Math.abs(vy); // стены осевые
+  const len = Math.hypot(vx, vy);
   if (len === 0) return null;
   const ux = vx / len;
   const uy = vy / len;
@@ -55,8 +55,8 @@ export function rebaseOpenings<T extends { wallPointId: number; offsetCm: Cm; wi
     const oldWall = wallByPoint(oldPoints, o.wallPointId);
     const newWall = wallByPoint(newPoints, o.wallPointId);
     if (!oldWall || !newWall) return o;
-    const oldLen = Math.abs(oldWall.b.x - oldWall.a.x) + Math.abs(oldWall.b.y - oldWall.a.y);
-    const newLen = Math.abs(newWall.b.x - newWall.a.x) + Math.abs(newWall.b.y - newWall.a.y);
+    const oldLen = Math.hypot(oldWall.b.x - oldWall.a.x, oldWall.b.y - oldWall.a.y);
+    const newLen = Math.hypot(newWall.b.x - newWall.a.x, newWall.b.y - newWall.a.y);
     if (oldLen === 0 || oldLen === newLen) return o;
     const offset = Math.max(0, Math.min(o.offsetCm, oldLen - o.widthCm));
     const ratio = offset / oldLen;

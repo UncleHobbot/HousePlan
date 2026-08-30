@@ -74,6 +74,7 @@ export function RoomEditor({
   floorId,
   shellMode = false,
   openingKinds,
+  allocateId,
   onChangeContour,
   onChangeZones,
   onChangeOpenings,
@@ -88,6 +89,7 @@ export function RoomEditor({
   /** оболочка этажа: вместо зон — окна и входные двери */
   shellMode?: boolean;
   openingKinds: OpeningKind[];
+  allocateId: (kind: 'point' | 'opening' | 'zone') => number;
   onChangeContour: (contour: Contour) => void;
   onChangeZones: (zones: Zone[]) => void;
   onChangeOpenings: (openings: Opening[]) => void;
@@ -105,7 +107,6 @@ export function RoomEditor({
   const [inputBad, setInputBad] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const slideRef = useRef<number | null>(null);
-  const maxPointId = useRef(Math.max(0, ...points.map((p) => p.id)));
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   // зоны
@@ -114,13 +115,9 @@ export function RoomEditor({
   const [zoneDraft, setZoneDraft] = useState<ZoneDraft | null>(null);
   const [zoneVertexDrag, setZoneVertexDrag] = useState<{ zoneId: number; pointId: number } | null>(null);
   const zoneVertexDragRef = useRef<{ zoneId: number; pointId: number } | null>(null);
-  const maxZonePointId = useRef(
-    Math.max(0, ...zones.flatMap((z) => z.points.map((p) => p.id))),
-  );
   // проёмы
   const [openingKind, setOpeningKind] = useState<OpeningKind>(openingKinds[0]);
   const [openingMode, setOpeningMode] = useState<OpeningKind | null>(null);
-  const maxOpeningId = useRef(Math.max(0, ...openings.map((o) => o.id)));
 
   function say(kind: Banner['kind'], text: string) {
     setBanner({ kind, text });
@@ -286,7 +283,7 @@ export function RoomEditor({
       let t = ((raw.x - a.x) * vx + (raw.y - a.y) * vy) / l2;
       t = Math.max(0.05, Math.min(0.95, t));
       const mid = { x: Math.round(a.x + vx * t), y: Math.round(a.y + vy * t) };
-      const newId = ++maxPointId.current;
+      const newId = allocateId('point');
       const pts = [...points];
       pts.splice(wall + 1, 0, { id: newId, ...mid });
       const thicknesses = { ...contour.thicknesses, [newId]: contour.thicknesses[a.id] ?? 10 };
@@ -317,38 +314,34 @@ export function RoomEditor({
         setZoneDraft({
           kind: zoneKind === 'decorativeWall' ? 'decorativeWall' : 'partition',
           anchorId: anchor.pointId,
-          points: [{ id: ++maxZonePointId.current, x: anchor.coords.x, y: anchor.coords.y }],
+          points: [{ id: allocateId('point'), x: anchor.coords.x, y: anchor.coords.y }],
           wallDir: wallDirAt(anchor.pointId),
         });
         say('info', 'Теперь кликните второй конец простенка.');
         return;
       }
-      // второй клик: прямоугольник от точки привязки вдоль стены, толщиной внутрь
+      // второй клик: простенок растёт от стены внутрь помещения
       const anchor = zoneDraft.points[0];
       const u = zoneDraft.wallDir;
       if (!u) return;
-      let ux = u.x, uy = u.y;
-      let len = (raw.x - anchor.x) * ux + (raw.y - anchor.y) * uy;
-      if (Math.abs(len) < 20) {
-        say('bad', 'Простенок слишком короткий.');
-        return;
-      }
-      if (len < 0) {
-        ux = -ux; uy = -uy; len = -len;
-      }
-      let nx = -uy, ny = ux;
+      let nx = -u.y, ny = u.x;
       if (nx * (centroidPt.x - anchor.x) + ny * (centroidPt.y - anchor.y) < 0) {
         nx = -nx; ny = -ny;
       }
-      const cornerIds = [1, 2, 3, 4].map(() => ++maxZonePointId.current);
+      const len = (raw.x - anchor.x) * nx + (raw.y - anchor.y) * ny;
+      if (len < 20) {
+        say('bad', 'Простенок слишком короткий.');
+        return;
+      }
+      const cornerIds = [1, 2, 3, 4].map(() => allocateId('point'));
       const corners: Point[] = [
         { id: cornerIds[0], x: anchor.x, y: anchor.y },
-        { id: cornerIds[1], x: Math.round(anchor.x + ux * len), y: Math.round(anchor.y + uy * len) },
-        { id: cornerIds[2], x: Math.round(anchor.x + ux * len + nx * PARTITION_THICKNESS), y: Math.round(anchor.y + uy * len + ny * PARTITION_THICKNESS) },
-        { id: cornerIds[3], x: Math.round(anchor.x + nx * PARTITION_THICKNESS), y: Math.round(anchor.y + ny * PARTITION_THICKNESS) },
+        { id: cornerIds[1], x: Math.round(anchor.x + nx * len), y: Math.round(anchor.y + ny * len) },
+        { id: cornerIds[2], x: Math.round(anchor.x + nx * len + u.x * PARTITION_THICKNESS), y: Math.round(anchor.y + ny * len + u.y * PARTITION_THICKNESS) },
+        { id: cornerIds[3], x: Math.round(anchor.x + u.x * PARTITION_THICKNESS), y: Math.round(anchor.y + u.y * PARTITION_THICKNESS) },
       ];
       const zone: Zone = {
-        id: ++maxZonePointId.current,
+        id: allocateId('zone'),
         kind: zoneKind === 'decorativeWall' ? 'decorativeWall' : 'partition',
         name: ZONE_KIND_LABELS[zoneKind],
         points: corners,
@@ -373,7 +366,7 @@ export function RoomEditor({
       setZoneDraft({
         kind: zoneKind,
         anchorId: anchor.pointId,
-        points: [{ id: ++maxZonePointId.current, x: anchor.coords.x, y: anchor.coords.y }],
+        points: [{ id: allocateId('point'), x: anchor.coords.x, y: anchor.coords.y }],
         wallDir: null,
       });
       say('info', 'Кликайте вершины зоны; клик рядом с первой точкой замыкает.');
@@ -387,7 +380,7 @@ export function RoomEditor({
       }
     }
     const p = snapPoint(raw);
-    setZoneDraft({ ...zoneDraft, points: [...zoneDraft.points, { id: ++maxZonePointId.current, ...p }] });
+    setZoneDraft({ ...zoneDraft, points: [...zoneDraft.points, { id: allocateId('point'), ...p }] });
   }
 
   function closeZoneDraft() {
@@ -396,7 +389,7 @@ export function RoomEditor({
       return;
     }
     const zone: Zone = {
-      id: ++maxZonePointId.current,
+      id: allocateId('zone'),
       kind: zoneDraft.kind,
       name: ZONE_KIND_LABELS[zoneDraft.kind],
       points: zoneDraft.points,
@@ -431,7 +424,7 @@ export function RoomEditor({
       const defaults = OPENING_DEFAULTS[openingMode];
       const wallLen = Math.hypot(wallEnd.x - wallStart.x, wallEnd.y - wallStart.y);
       const along = Math.hypot(raw.x - wallStart.x, raw.y - wallStart.y);
-      const id = ++maxOpeningId.current;
+      const id = allocateId('opening');
       const opening: Opening = {
         id,
         kind: openingMode,
@@ -479,7 +472,7 @@ export function RoomEditor({
         const a = points[wall];
         const b = points[(wall + 1) % n];
         const mid = { x: Math.round((a.x + b.x) / 2), y: Math.round((a.y + b.y) / 2) };
-        const newId = ++maxPointId.current;
+        const newId = allocateId('point');
         const pts = [...points];
         pts.splice(wall + 1, 0, { id: newId, ...mid });
         const thicknesses = { ...contour.thicknesses, [newId]: contour.thicknesses[a.id] ?? 10 };
@@ -496,18 +489,20 @@ export function RoomEditor({
 
     // рисование
     if (points.length >= 3 && nearFirst(raw)) {
-      applyContour({ ...contour, closed: true });
       const bad = crossings(points).length > 0;
+      if (bad) {
+        say('bad', 'Контур пересекает сам себя. Перед замыканием передвиньте точки так, чтобы линии не пересекались.');
+        return;
+      }
+      applyContour({ ...contour, closed: true });
       say(
-        bad ? 'bad' : 'ok',
-        bad
-          ? 'Контур замкнут, но пересекает сам себя — прибивание заблокировано, пока контур не исправлен.'
-          : 'Контур замкнут! Выберите две точки и прибейте размер.',
+        'ok',
+        'Контур замкнут! Выберите две точки и прибейте размер.',
       );
       return;
     }
     const p = snapPoint(raw);
-    const id = ++maxPointId.current;
+    const id = allocateId('point');
     applyContour({ ...contour, points: [...points, { id, ...p }] });
     say('info', 'Точка поставлена. Клик в первую точку замыкает контур.');
   }
@@ -571,7 +566,7 @@ export function RoomEditor({
         <span className="muted">
           точек: {n} · контур: {contour.closed ? 'замкнут' : 'рисуется'}
           {crossPairs.length > 0 && <b className="bad-text"> · пересекает сам себя!</b>}
-          {hasDiagonals && <b className="bad-text"> · есть диагональные стены</b>}
+          {hasDiagonals && <span> · есть диагональные стены</span>}
         </span>
       </div>
       <div className="row">
@@ -939,6 +934,10 @@ export function RoomEditor({
                   <select
                     value={z.spansFloors?.fromFloorId ?? ''}
                     onChange={(e) => {
+                      if (e.target.value === '') {
+                        updateZones(zones.map((x) => (x.id === z.id ? { ...x, spansFloors: undefined } : x)));
+                        return;
+                      }
                       const from = Number(e.target.value);
                       updateZones(zones.map((x) => (x.id === z.id ? { ...x, spansFloors: { fromFloorId: from, toFloorId: x.spansFloors?.toFloorId ?? from } } : x)));
                     }}

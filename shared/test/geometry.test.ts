@@ -128,6 +128,41 @@ test('участок через угол отвергается', () => {
   assert.equal(r.ok, false);
 });
 
+test('диагональ вне выбранного участка не мешает прибить прямую стену', () => {
+  const contour: Contour = {
+    points: [
+      { id: 1, x: 0, y: 0 },
+      { id: 2, x: 100, y: 0 },
+      { id: 3, x: 150, y: 50 },
+      { id: 4, x: 150, y: 100 },
+      { id: 5, x: 0, y: 100 },
+    ],
+    thicknesses: {}, locks: [], closed: true,
+  };
+  const result = tryLock(contour, 1, 2, 120);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(wallLen(result.contour, 0), 120);
+    assert.deepEqual(result.contour.points[0], contour.points[0]);
+  }
+});
+
+test('прибивание не создаёт части стены короче минимума', () => {
+  const contour: Contour = {
+    points: [
+      { id: 1, x: 0, y: 0 },
+      { id: 5, x: 50, y: 0 },
+      { id: 2, x: 100, y: 0 },
+      { id: 3, x: 100, y: 100 },
+      { id: 4, x: 0, y: 100 },
+    ],
+    thicknesses: {}, locks: [], closed: true,
+  };
+  const result = tryLock(contour, 1, 2, 10);
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.reason, /каждая должна быть не короче/);
+});
+
 test('скольжение точки по прямой стене', () => {
   const pts = [
     { id: 1, x: 0, y: 0 },

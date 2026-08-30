@@ -63,3 +63,14 @@ test('пустая стена и вертикальная стена обраб�
   assert.ok(s);
   assert.deepEqual(s.start, { x: 0, y: 50 });
 });
+
+test('проём на диагональной стене откладывается в сантиметрах вдоль стены', () => {
+  const diagonal: Point[] = [
+    { id: 1, x: 0, y: 0 },
+    { id: 2, x: 300, y: 400 },
+  ];
+  const segment = openingSegment(diagonal, 1, 100, 50);
+  assert.ok(segment);
+  assert.deepEqual(segment.start, { x: 60, y: 80 });
+  assert.deepEqual(segment.end, { x: 90, y: 120 });
+});
