@@ -7,6 +7,6 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test test/geometry.test.ts test/zones.test.ts test/openings.test.ts test/objects.test.ts test/snapshots.test.ts test/counters.test.ts"
+    "test": "tsx --test test/geometry.test.ts test/zones.test.ts test/openings.test.ts test/objects.test.ts test/snapshots.test.ts test/counters.test.ts test/placements.test.ts"
   }
 }

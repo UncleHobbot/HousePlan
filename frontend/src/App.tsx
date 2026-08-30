@@ -1,23 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AssistantCard, Contour, Floor, Project, Room } from '@houseplan/shared';
+import type { AssistantCard, Floor, Project, Room } from '@houseplan/shared';
 import {
+  allocateId,
   applySnapshot,
   createSnapshot,
+  deleteObject,
   diffPlacements,
+  largestRoom,
+  locateObject,
   livePlacements,
+  placeObject,
   rebaseCounters,
-  allocateId,
+  roomCentroid,
 } from '@houseplan/shared';
 import { api, type ImportCard, type ProjectSummary } from './api';
 import { FloorView } from './FloorView';
 import { RoomEditor } from './editor/RoomEditor';
 import { StockPanel } from './StockPanel';
-
-function bboxArea(c: Contour): number {
-  const xs = c.points.map((p) => p.x);
-  const ys = c.points.map((p) => p.y);
-  return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-}
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
@@ -614,22 +613,14 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
             )}
             <div className="floor-grid">
               <FloorView
-                floor={floor}
+                project={project}
+                floorId={floor.id}
                 objects={project.objects}
                 projectedZones={projectedZones}
                 highlight={highlightIds}
-                onChangeFloor={(f) =>
+                onChangeFloors={(floors) =>
                   update((p) => {
-                    const placedHere = new Set(f.rooms.flatMap((room) => room.placements.map((placement) => placement.objectId)));
-                    for (const projectFloor of p.floors) {
-                      if (projectFloor.id === floor.id) {
-                        projectFloor.rooms = f.rooms;
-                      } else {
-                        for (const room of projectFloor.rooms) {
-                          room.placements = room.placements.filter((placement) => !placedHere.has(placement.objectId));
-                        }
-                      }
-                    }
+                    p.floors = floors;
                   })
                 }
               />
@@ -640,12 +631,8 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 onAcceptImport={acceptImport}
                 onRejectImport={rejectImport}
                 status={(objectId) => {
-                  for (const f of project.floors) {
-                    for (const r of f.rooms) {
-                      if (r.placements.some((pl) => pl.objectId === objectId)) return `${f.name}: ${r.name}`;
-                    }
-                  }
-                  return 'на складе';
+                  const located = locateObject(project, objectId);
+                  return located ? `${located.floor.name}: ${located.room.name}` : 'на складе';
                 }}
                 onCreate={(object) =>
                   update((p) => {
@@ -669,27 +656,18 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 }
                 onDelete={(objectId) =>
                   update((p) => {
-                    p.objects = p.objects.filter((o) => o.id !== objectId);
-                    for (const f of p.floors) {
-                      for (const r of f.rooms) {
-                        r.placements = r.placements.filter((pl) => pl.objectId !== objectId);
-                      }
-                    }
+                    const cleaned = deleteObject(p, objectId);
+                    p.objects = cleaned.objects;
+                    p.floors = cleaned.floors;
                   })
                 }
                 onPlace={(objectId) =>
                   update((p) => {
-                    const f = p.floors.find((f2) => f2.id === floor.id)!;
-                    const room = [...f.rooms].filter((r) => r.contour.closed).sort((a, b) => bboxArea(b.contour) - bboxArea(a.contour))[0];
+                    const target = p.floors.find((f2) => f2.id === floor.id)!;
+                    const room = largestRoom(target);
                     if (!room) return;
-                    const cx = Math.round(room.contour.points.reduce((a, pt) => a + pt.x, 0) / room.contour.points.length);
-                    const cy = Math.round(room.contour.points.reduce((a, pt) => a + pt.y, 0) / room.contour.points.length);
-                    for (const projectFloor of p.floors) {
-                      for (const projectRoom of projectFloor.rooms) {
-                        projectRoom.placements = projectRoom.placements.filter((pl) => pl.objectId !== objectId);
-                      }
-                    }
-                    room.placements.push({ objectId, roomId: room.id, x: cx, y: cy, rotationDeg: 0 });
+                    const next = placeObject(p, objectId, target.id, roomCentroid(room), room.id);
+                    if (next) p.floors = next.floors;
                   })
                 }
               />

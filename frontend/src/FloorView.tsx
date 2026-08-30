@@ -1,13 +1,16 @@
 import { useRef, useState } from 'react';
 import type Konva from 'konva';
 import { Group, Layer, Line, Stage, Text } from 'react-konva';
-import type { Floor, SceneObject, Zone } from '@houseplan/shared';
+import type { Floor, Project, SceneObject, Zone } from '@houseplan/shared';
 import {
   bodyPolygon,
   clearancePolygon,
   conflictObjectIds,
   openingSegment,
+  placeObject,
   roomAt,
+  rotateObject,
+  unplaceObject,
 } from '@houseplan/shared';
 import { createViewport } from './editor/roomCanvas/viewport';
 
@@ -34,24 +37,32 @@ function withAlpha(color: string, alpha: number): string {
 /**
  * План этажа с расстановкой: объекты перетаскиваются мышью, при выборе —
  * поворот и возврат на склад. Допуски подсвечиваются при конфликте.
+ * Правила размещения живут в shared (placeObject/rotateObject/unplaceObject) —
+ * здесь только попадание мышью и отрисовка.
  */
 export function FloorView({
-  floor,
+  project,
+  floorId,
   objects,
   projectedZones,
   highlight,
-  onChangeFloor,
+  onChangeFloors,
 }: {
-  floor: Floor;
+  project: Project;
+  floorId: number;
   objects: SceneObject[];
   projectedZones?: Zone[];
   /** объекты, помеченные сравнением вариантов (переехали или добавлены) */
   highlight?: Set<number>;
-  onChangeFloor: (floor: Floor) => void;
+  onChangeFloors: (floors: Floor[]) => void;
 }) {
+  const floor = project.floors.find((f) => f.id === floorId) ?? null;
   const [selected, setSelected] = useState<number | null>(null);
   const dragRef = useRef<{ objectId: number; dx: number; dy: number } | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
+
+  if (!floor) return <p className="muted">Этаж не найден.</p>;
+  const activeFloor = floor;
 
   const zones = [...floor.rooms.flatMap((room) => room.zones), ...(projectedZones ?? [])];
   const conflicts = conflictObjectIds(objects, floor, zones);
@@ -103,65 +114,45 @@ export function FloorView({
   }
 
   function movePlacement(objectId: number, x: number, y: number) {
-    const targetRoom = roomAt(floor, x, y);
-    const current = floor.rooms.find((room) =>
-      room.placements.some((placement) => placement.objectId === objectId),
-    );
-    const roomId = targetRoom ?? current?.id;
+    // комната под курсором; если курсор вне комнат — объект остаётся в текущей
+    const roomId = roomAt(activeFloor, x, y) ?? locateRoomId(objectId);
     if (roomId === undefined) return;
-    const rotation =
-      current?.placements.find((placement) => placement.objectId === objectId)?.rotationDeg ?? 0;
-    onChangeFloor({
-      ...floor,
-      rooms: floor.rooms.map((room) => {
-        const without = room.placements.filter((placement) => placement.objectId !== objectId);
-        if (room.id === roomId) {
-          return {
-            ...room,
-            placements: [
-              ...without,
-              {
-                objectId,
-                roomId,
-                x: Math.round(x),
-                y: Math.round(y),
-                rotationDeg: rotation,
-              },
-            ],
-          };
+    const rotation = locateRotation(objectId);
+    const next = placeObject(project, objectId, floorId, { x, y }, roomId, rotation);
+    if (next) onChangeFloors(next.floors);
+  }
+
+  function locateRoomId(objectId: number): number | undefined {
+    const located = project.floors
+      .flatMap((floor) => floor.rooms)
+      .find((room) => room.placements.some((placement) => placement.objectId === objectId));
+    return located?.id;
+  }
+
+  function locateRotation(objectId: number): number {
+    const located = locateObjectShared(objectId);
+    return located?.placement.rotationDeg ?? 0;
+  }
+
+  function locateObjectShared(objectId: number) {
+    for (const floor of project.floors) {
+      for (const room of floor.rooms) {
+        for (const placement of room.placements) {
+          if (placement.objectId === objectId) return { floor, room, placement };
         }
-        return { ...room, placements: without };
-      }),
-    });
+      }
+    }
+    return null;
   }
 
   function rotateSelected(delta: number) {
-    if (selected === null) return;
-    onChangeFloor({
-      ...floor,
-      rooms: floor.rooms.map((room) => ({
-        ...room,
-        placements: room.placements.map((placement) =>
-          placement.objectId === selected
-            ? {
-                ...placement,
-                rotationDeg: ((placement.rotationDeg + delta) % 360 + 360) % 360,
-              }
-            : placement,
-        ),
-      })),
-    });
+    const next = rotateObject(project, selected!, delta);
+    if (next) onChangeFloors(next.floors);
   }
 
   function removeFromPlan() {
     if (selected === null) return;
-    onChangeFloor({
-      ...floor,
-      rooms: floor.rooms.map((room) => ({
-        ...room,
-        placements: room.placements.filter((placement) => placement.objectId !== selected),
-      })),
-    });
+    onChangeFloors(unplaceObject(project, selected).floors);
     setSelected(null);
   }
 
@@ -184,33 +175,10 @@ export function FloorView({
     if (!objectId) return;
     const point = clientPointInPlan(event);
     if (!point) return;
-    const roomId = roomAt(floor, point.x, point.y);
+    const roomId = roomAt(activeFloor, point.x, point.y);
     if (roomId === null) return;
-    onChangeFloor({
-      ...floor,
-      rooms: floor.rooms.map((room) =>
-        room.id === roomId
-          ? {
-              ...room,
-              placements: [
-                ...room.placements.filter((placement) => placement.objectId !== objectId),
-                {
-                  objectId,
-                  roomId,
-                  x: Math.round(point.x),
-                  y: Math.round(point.y),
-                  rotationDeg: 0,
-                },
-              ],
-            }
-          : {
-              ...room,
-              placements: room.placements.filter(
-                (placement) => placement.objectId !== objectId,
-              ),
-            },
-      ),
-    });
+    const next = placeObject(project, objectId, floorId, point, roomId);
+    if (next) onChangeFloors(next.floors);
   }
 
   return (
@@ -223,8 +191,14 @@ export function FloorView({
               <b className="bad-text"> · допуск пересекает чужое тело или зону</b>
             ) : null}
           </span>
-          <button onClick={() => rotateSelected(-15)}>⟲ −15°</button>
-          <button onClick={() => rotateSelected(15)}>⟳ +15°</button>
+          <button onClick={() => {
+            const next = rotateObject(project, selected, -15);
+            if (next) onChangeFloors(next.floors);
+          }}>⟲ −15°</button>
+          <button onClick={() => {
+            const next = rotateObject(project, selected, 15);
+            if (next) onChangeFloors(next.floors);
+          }}>⟳ +15°</button>
           <button onClick={removeFromPlan}>Убрать на склад</button>
         </div>
       ) : null}
