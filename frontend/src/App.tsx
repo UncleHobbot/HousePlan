@@ -1,8 +1,15 @@
 import { useEffect, useState } from 'react';
-import type { Floor, Project } from '@houseplan/shared';
+import type { Contour, Floor, Project } from '@houseplan/shared';
 import { api, type ProjectSummary } from './api';
-import { PlanView } from './PlanView';
+import { FloorView } from './FloorView';
 import { RoomEditor } from './editor/RoomEditor';
+import { StockPanel } from './StockPanel';
+
+function bboxArea(c: Contour): number {
+  const xs = c.points.map((p) => p.x);
+  const ys = c.points.map((p) => p.y);
+  return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+}
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
@@ -278,7 +285,69 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
                 ))}
               </ul>
             )}
-            <PlanView floor={floor} />
+            <div className="floor-grid">
+              <FloorView
+                floor={floor}
+                objects={project.objects}
+                onChangeFloor={(f) =>
+                  update((p) => {
+                    p.floors.find((f2) => f2.id === floor.id)!.rooms = f.rooms;
+                  })
+                }
+              />
+              <StockPanel
+                objects={project.objects}
+                status={(objectId) => {
+                  for (const f of project.floors) {
+                    for (const r of f.rooms) {
+                      if (r.placements.some((pl) => pl.objectId === objectId)) return `${f.name}: ${r.name}`;
+                    }
+                  }
+                  return 'на складе';
+                }}
+                onCreate={(object) =>
+                  update((p) => {
+                    const id = (p.counters.object ?? 0) + 1;
+                    p.counters.object = id;
+                    p.objects.push({ ...object, id });
+                  })
+                }
+                onUpdate={(object) =>
+                  update((p) => {
+                    const idx = p.objects.findIndex((o) => o.id === object.id);
+                    if (idx >= 0) p.objects[idx] = object;
+                  })
+                }
+                onClone={(object) =>
+                  update((p) => {
+                    const id = (p.counters.object ?? 0) + 1;
+                    p.counters.object = id;
+                    p.objects.push({ ...structuredClone(object), id, name: object.name + ' (копия)' });
+                  })
+                }
+                onDelete={(objectId) =>
+                  update((p) => {
+                    p.objects = p.objects.filter((o) => o.id !== objectId);
+                    for (const f of p.floors) {
+                      for (const r of f.rooms) {
+                        r.placements = r.placements.filter((pl) => pl.objectId !== objectId);
+                      }
+                    }
+                  })
+                }
+                onPlace={(objectId) =>
+                  update((p) => {
+                    const f = p.floors.find((f2) => f2.id === floor.id)!;
+                    const room = [...f.rooms].filter((r) => r.contour.closed).sort((a, b) => bboxArea(b.contour) - bboxArea(a.contour))[0];
+                    if (!room) return;
+                    const cx = Math.round(room.contour.points.reduce((a, pt) => a + pt.x, 0) / room.contour.points.length);
+                    const cy = Math.round(room.contour.points.reduce((a, pt) => a + pt.y, 0) / room.contour.points.length);
+                    room.placements = room.placements.filter((pl) => pl.objectId !== objectId);
+                    room.placements.push({ objectId, roomId: room.id, x: cx, y: cy, rotationDeg: 0 });
+                  })
+                }
+              />
+            </div>
           </>
         )
       ) : (
