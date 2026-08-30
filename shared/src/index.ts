@@ -2,6 +2,7 @@
 // Все длины — целые сантиметры. Осей стен нет: линии контуров — внутренние грани.
 
 export * from './geometry.js';
+export * from './openings.js';
 export * from './zones.js';
 
 /** Версия формата файла плана (внешний контракт — ADR 0005). */
@@ -42,6 +43,8 @@ export type OpeningKind = 'window' | 'entryDoor' | 'innerDoor';
 export interface Opening {
   id: number;
   kind: OpeningKind;
+  /** стена проёма: идентификатор начальной точки стены */
+  wallPointId: number;
   /** сантиметры от угла стены; ведёт себя как доля длины стены */
   offsetCm: Cm;
   widthCm: Cm;

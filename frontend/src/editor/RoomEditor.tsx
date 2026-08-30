@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Contour, Floor, Point, Zone, ZoneKind } from '@houseplan/shared';
+import type { Contour, Floor, Opening, OpeningKind, Point, Zone, ZoneKind } from '@houseplan/shared';
 import {
   canSlide,
   chainInfo,
@@ -7,6 +7,8 @@ import {
   lockLabel,
   lockedWalls,
   NO_CLEARANCE,
+  openingSegment,
+  rebaseOpenings,
   rebaseZones,
   slidePoint,
   tryLock,
@@ -15,6 +17,24 @@ import {
 
 const GRID = 25;
 const PARTITION_THICKNESS = 15;
+
+const OPENING_LABELS: Record<OpeningKind, string> = {
+  window: 'Окно',
+  entryDoor: 'Входная дверь',
+  innerDoor: 'Дверь',
+};
+
+const OPENING_DEFAULTS: Record<OpeningKind, { width: number; sill?: number; top?: number; height?: number }> = {
+  window: { width: 120, sill: 90, top: 220 },
+  entryDoor: { width: 100, height: 200 },
+  innerDoor: { width: 90, height: 200 },
+};
+
+const OPENING_COLORS: Record<OpeningKind, string> = {
+  window: '#2563eb',
+  entryDoor: '#b45309',
+  innerDoor: '#b45309',
+};
 
 const ZONE_COLORS: Record<ZoneKind, string> = {
   stairs: '#7c3aed',
@@ -49,19 +69,28 @@ export function RoomEditor({
   roomName,
   contour,
   zones,
+  openings,
   floors,
   floorId,
+  shellMode = false,
+  openingKinds,
   onChangeContour,
   onChangeZones,
+  onChangeOpenings,
   onDone,
 }: {
   roomName: string;
   contour: Contour;
   zones: Zone[];
+  openings: Opening[];
   floors: Floor[];
   floorId: number;
+  /** оболочка этажа: вместо зон — окна и входные двери */
+  shellMode?: boolean;
+  openingKinds: OpeningKind[];
   onChangeContour: (contour: Contour) => void;
   onChangeZones: (zones: Zone[]) => void;
+  onChangeOpenings: (openings: Opening[]) => void;
   onDone: () => void;
 }) {
   const points = contour.points;
@@ -88,17 +117,23 @@ export function RoomEditor({
   const maxZonePointId = useRef(
     Math.max(0, ...zones.flatMap((z) => z.points.map((p) => p.id))),
   );
+  // проёмы
+  const [openingKind, setOpeningKind] = useState<OpeningKind>(openingKinds[0]);
+  const [openingMode, setOpeningMode] = useState<OpeningKind | null>(null);
+  const maxOpeningId = useRef(Math.max(0, ...openings.map((o) => o.id)));
 
   function say(kind: Banner['kind'], text: string) {
     setBanner({ kind, text });
   }
 
-  /** Меняет контур и подтягивает привязанные зоны за сдвинувшимися точками. */
-  function mutateContour(f: (c: Contour) => Contour) {
-    const newContour = f(contour);
-    const rebased = rebaseZones(contour.points, newContour.points, zones);
-    onChangeContour(newContour);
-    onChangeZones(rebased);
+  /**
+   * Меняет контур и подтягивает привязанное: зоны — за своими точками,
+   * проёмы — за долей стены (не вылезают за край).
+   */
+  function applyContour(c: Contour) {
+    onChangeContour(c);
+    onChangeZones(rebaseZones(contour.points, c.points, zones));
+    onChangeOpenings(rebaseOpenings(contour.points, c.points, openings));
   }
 
   function updateZones(zones: Zone[]) {
@@ -189,7 +224,7 @@ export function RoomEditor({
     const raw = svgPoint(e);
     setMouse(raw);
     if (slideRef.current !== null) {
-      setContourQuiet(slidePoint(contour, slideRef.current, raw.x, raw.y));
+      applyContour(slidePoint(contour, slideRef.current, raw.x, raw.y));
       return;
     }
     if (zoneVertexDragRef.current) {
@@ -385,6 +420,35 @@ export function RoomEditor({
     const raw = svgPoint(e);
     const pt = pointAt(raw);
 
+    if (contour.closed && openingMode !== null) {
+      const wall = wallAt(raw);
+      if (wall === null) {
+        say('info', 'Кликните по стене — проём встанет в это место.');
+        return;
+      }
+      const wallStart = points[wall];
+      const wallEnd = points[(wall + 1) % n];
+      const defaults = OPENING_DEFAULTS[openingMode];
+      const wallLen = Math.hypot(wallEnd.x - wallStart.x, wallEnd.y - wallStart.y);
+      const along = Math.hypot(raw.x - wallStart.x, raw.y - wallStart.y);
+      const id = ++maxOpeningId.current;
+      const opening: Opening = {
+        id,
+        kind: openingMode,
+        wallPointId: wallStart.id,
+        offsetCm: Math.max(0, Math.min(Math.round(along - defaults.width / 2), Math.max(0, Math.round(wallLen) - defaults.width))),
+        widthCm: defaults.width,
+        sillCm: defaults.sill,
+        topCm: defaults.top,
+        heightCm: defaults.height,
+        attributes: [],
+      };
+      onChangeOpenings([...openings, opening]);
+      setOpeningMode(null);
+      say('ok', `${OPENING_LABELS[openingMode]}: ${opening.offsetCm} см от угла, ширина ${opening.widthCm} см.`);
+      return;
+    }
+
     if (contour.closed && zoneMode !== 'none') {
       zoneClick(raw);
       return;
@@ -419,7 +483,7 @@ export function RoomEditor({
         const pts = [...points];
         pts.splice(wall + 1, 0, { id: newId, ...mid });
         const thicknesses = { ...contour.thicknesses, [newId]: contour.thicknesses[a.id] ?? 10 };
-        setContourQuiet({ ...contour, points: pts, thicknesses });
+        applyContour({ ...contour, points: pts, thicknesses });
         setSelA(null);
         setSelB(null);
         say('info', 'Стена разрезана на две — каждой части можно прибить свой размер.');
@@ -432,7 +496,7 @@ export function RoomEditor({
 
     // рисование
     if (points.length >= 3 && nearFirst(raw)) {
-      setContourQuiet({ ...contour, closed: true });
+      applyContour({ ...contour, closed: true });
       const bad = crossings(points).length > 0;
       say(
         bad ? 'bad' : 'ok',
@@ -444,13 +508,8 @@ export function RoomEditor({
     }
     const p = snapPoint(raw);
     const id = ++maxPointId.current;
-    setContourQuiet({ ...contour, points: [...points, { id, ...p }] });
+    applyContour({ ...contour, points: [...points, { id, ...p }] });
     say('info', 'Точка поставлена. Клик в первую точку замыкает контур.');
-  }
-
-  /** Изменение контура без каскада по зонам (рисование, разрез, скольжение). */
-  function setContourQuiet(c: Contour) {
-    onChangeContour(c);
   }
 
   // ---------- приборная панель ----------
@@ -481,7 +540,7 @@ export function RoomEditor({
     const target = parseInt(inputValue, 10);
     const res = tryLock(contour, selA, selB, target);
     if (res.ok) {
-      mutateContour(() => res.contour);
+      applyContour(res.contour);
       setInputBad(false);
       say('ok', `Размер прибит: ${res.label}. Точка А${selA} на месте, остальное подстроилось.`);
     } else {
@@ -637,6 +696,38 @@ export function RoomEditor({
               );
             })}
 
+          {/* проёмы */}
+          {contour.closed &&
+            openings.map((o) => {
+              const seg = openingSegment(points, o.wallPointId, o.offsetCm, o.widthCm);
+              if (!seg) return null;
+              const color = OPENING_COLORS[o.kind];
+              const c = centroid();
+              const hinge = o.opensTo === 'left' ? seg.start : seg.end;
+              const other = o.opensTo === 'left' ? seg.end : seg.start;
+              let dx = other.x - hinge.x, dy = other.y - hinge.y;
+              const dl = Math.hypot(dx, dy) || 1;
+              dx /= dl; dy /= dl;
+              let nx = -dy, ny = dx;
+              if (nx * (c.x - hinge.x) + ny * (c.y - hinge.y) < 0) { nx = -nx; ny = -ny; }
+              const hx = X(hinge.x), hy = Y(hinge.y);
+              const r = o.widthCm * k;
+              const lx = hx + dx * r, ly = hy + dy * r;
+              const px = hx + nx * r, py = hy + ny * r;
+              const sweep = (lx - hx) * (py - hy) - (ly - hy) * (px - hx) > 0 ? 1 : 0;
+              return (
+                <g key={o.id}>
+                  <line x1={X(seg.start.x)} y1={Y(seg.start.y)} x2={X(seg.end.x)} y2={Y(seg.end.y)} stroke={color} strokeWidth={7} strokeLinecap="butt" />
+                  {o.kind !== 'window' && (
+                    <path
+                      d={`M ${hx} ${hy} L ${lx} ${ly} A ${r} ${r} 0 0 ${sweep} ${px} ${py}`}
+                      fill="none" stroke={color} strokeWidth={1.5}
+                    />
+                  )}
+                </g>
+              );
+            })}
+
           {/* резинка при рисовании */}
           {!contour.closed && points.length > 0 && mouse && (
             <>
@@ -703,7 +794,7 @@ export function RoomEditor({
                   <span>{lockLabel(l)}</span>
                   <button
                     onClick={() => {
-                      setContourQuiet({ ...contour, locks: contour.locks.filter((x) => x.aId !== l.aId || x.bId !== l.bId) });
+                      applyContour({ ...contour, locks: contour.locks.filter((x) => x.aId !== l.aId || x.bId !== l.bId) });
                       say('info', `Замок «А${l.aId}–А${l.bId} = ${l.length}» снят.`);
                     }}
                   >
@@ -714,6 +805,82 @@ export function RoomEditor({
             </ul>
           )}
         </div>
+        <div className="card grow">
+          <h2>Проёмы</h2>
+          {openings.length === 0 && openingMode === null && (
+            <p className="muted">
+              {shellMode ? 'Окон и входных дверей нет.' : 'Внутренних дверей нет.'}
+            </p>
+          )}
+          <ul className="locks">
+            {openings.map((o) => (
+              <li key={o.id}>
+                <span className="row">
+                  {OPENING_LABELS[o.kind]}
+                  <input
+                    type="number"
+                    style={{ width: 70 }}
+                    value={o.offsetCm}
+                    title="сантиметры от угла"
+                    onChange={(e) =>
+                      onChangeOpenings(openings.map((x) => (x.id === o.id ? { ...x, offsetCm: Number(e.target.value) } : x)))
+                    }
+                  /> см
+                  <input
+                    type="number"
+                    style={{ width: 70 }}
+                    value={o.widthCm}
+                    title="ширина проёма"
+                    onChange={(e) =>
+                      onChangeOpenings(openings.map((x) => (x.id === o.id ? { ...x, widthCm: Number(e.target.value) } : x)))
+                    }
+                  /> шир.
+                  {o.kind !== 'window' && (
+                    <select
+                      value={o.opensTo ?? 'left'}
+                      title="сторона открывания"
+                      onChange={(e) =>
+                        onChangeOpenings(openings.map((x) => (x.id === o.id ? { ...x, opensTo: e.target.value as 'left' | 'right' } : x)))
+                      }
+                    >
+                      <option value="left">←</option>
+                      <option value="right">→</option>
+                    </select>
+                  )}
+                </span>
+                <button
+                  onClick={() => {
+                    onChangeOpenings(openings.filter((x) => x.id !== o.id));
+                    say('info', 'Проём удалён.');
+                  }}
+                >
+                  удалить
+                </button>
+              </li>
+            ))}
+          </ul>
+          {openingMode === null && openingKinds.length > 0 && (
+            <div className="row">
+              <select value={openingKind} onChange={(e) => setOpeningKind(e.target.value as OpeningKind)}>
+                {openingKinds.map((kind) => (
+                  <option key={kind} value={kind}>{OPENING_LABELS[kind]}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  setOpeningMode(openingKind);
+                  say('info', 'Кликните по стене — проём встанет в это место.');
+                }}
+              >
+                Поставить проём
+              </button>
+            </div>
+          )}
+          {openingMode !== null && (
+            <button onClick={() => setOpeningMode(null)}>Отмена</button>
+          )}
+        </div>
+        {!shellMode && (
         <div className="card grow">
           <h2>Служебные зоны</h2>
           {zones.length === 0 && zoneMode === 'none' && zoneDraft === null ? (
@@ -795,6 +962,7 @@ export function RoomEditor({
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

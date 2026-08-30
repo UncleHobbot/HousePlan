@@ -87,6 +87,7 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
   const [activeFloor, setActiveFloor] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
+  const [editingShell, setEditingShell] = useState(false);
 
   useEffect(() => {
     api
@@ -188,7 +189,30 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
         <button onClick={addFloor}>+ Этаж</button>
       </div>
       {floor ? (
-        editingRoomId !== null && floor.rooms.some((r) => r.id === editingRoomId) ? (
+        editingShell ? (
+          <RoomEditor
+            roomName="Оболочка этажа"
+            contour={floor.shell.contour}
+            zones={[]}
+            openings={floor.shell.openings}
+            floors={project.floors}
+            floorId={floor.id}
+            shellMode
+            openingKinds={['window', 'entryDoor']}
+            onChangeContour={(c) =>
+              update((p) => {
+                p.floors.find((f) => f.id === floor.id)!.shell.contour = c;
+              })
+            }
+            onChangeZones={() => {}}
+            onChangeOpenings={(o) =>
+              update((p) => {
+                p.floors.find((f) => f.id === floor.id)!.shell.openings = o;
+              })
+            }
+            onDone={() => setEditingShell(false)}
+          />
+        ) : editingRoomId !== null && floor.rooms.some((r) => r.id === editingRoomId) ? (
           (() => {
             const room = floor.rooms.find((r) => r.id === editingRoomId)!;
             return (
@@ -196,8 +220,11 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
                 roomName={room.name}
                 contour={room.contour}
                 zones={room.zones}
+                openings={room.openings}
                 floors={project.floors}
                 floorId={floor.id}
+                shellMode={false}
+                openingKinds={['innerDoor']}
                 onChangeContour={(c) =>
                   update((p) => {
                     const f = p.floors.find((f) => f.id === floor.id)!;
@@ -212,6 +239,13 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
                     r.zones = z;
                   })
                 }
+                onChangeOpenings={(o) =>
+                  update((p) => {
+                    const f = p.floors.find((f) => f.id === floor.id)!;
+                    const r = f.rooms.find((r) => r.id === editingRoomId)!;
+                    r.openings = o;
+                  })
+                }
                 onDone={() => setEditingRoomId(null)}
               />
             );
@@ -221,6 +255,9 @@ function ProjectPage({ name, onExit }: { name: string; onExit: () => void }) {
             <div className="row">
               <b>{floor.name}</b>
               <span className="muted">потолок: {floor.ceilingHeightCm} см</span>
+              <button onClick={() => setEditingShell(true)}>
+                {floor.shell.contour.closed ? 'Редактировать оболочку' : 'Нарисовать оболочку'}
+              </button>
               <button onClick={() => startDrawingRoom(floor)}>+ Нарисовать помещение</button>
             </div>
             {floor.rooms.length === 0 ? (
