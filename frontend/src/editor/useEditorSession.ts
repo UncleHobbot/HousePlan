@@ -21,8 +21,9 @@ import {
 } from '@houseplan/shared';
 import { createContourDimensionPinner, type ContourDimensionPinner } from './constraints/pinContourDimension';
 import { PLANEGCS_WASM_URL } from './constraints/planegcsWasm';
-import { OPENING_DEFAULTS, OPENING_LABELS, PARTITION_THICKNESS_CM } from './editorConstants';
-import { contourCentroid, projectOntoWall, reduceDimensionSelection, snapPoint } from './editorMachine';
+import { OPENING_DEFAULTS, PARTITION_THICKNESS_CM } from './editorConstants';
+import { projectOntoWall, reduceDimensionSelection, snapPoint } from './editorMachine';
+import { contourCentroid, OPENING_LABELS } from '../planScene';
 import type { Banner, CanvasPointerEvent, EditablePlan, RoomEditorProps, ZoneDraft } from './editorTypes';
 
 const INITIAL_BANNER: Banner = {

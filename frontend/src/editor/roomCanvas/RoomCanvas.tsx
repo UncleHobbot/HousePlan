@@ -1,9 +1,9 @@
 import { Fragment } from 'react';
 import { canSlide, lockedWalls, openingSegment, type Contour, type Opening, type Point, type Zone } from '@houseplan/shared';
 import { Circle, Layer, Line, Rect, Stage, Text } from 'react-konva';
-import { GRID_CM, OPENING_COLORS, ZONE_COLORS } from '../editorConstants';
+import { GRID_CM } from '../editorConstants';
+import { contourCentroid, wallThicknessBands, withAlpha, zoneStyle, openingStyle } from '../../planScene';
 import type { CanvasPointerEvent, DimensionSelection, ZoneDraft } from '../editorTypes';
-import { contourCentroid } from '../editorMachine';
 import { createViewport, type CanvasPoint } from './viewport';
 
 const WIDTH = 960;
@@ -128,7 +128,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
           {props.snap && horizontalGrid}
 
           {zones.map((zone) => {
-            const color = ZONE_COLORS[zone.kind];
+            const color = zoneStyle(zone.kind).color;
             const center = contourCentroid(zone.points);
             const label = viewport.toCanvas(center);
             return (
@@ -218,7 +218,7 @@ export function RoomCanvas(props: RoomCanvasProps) {
           {contour.closed && openings.map((opening) => {
             const segment = openingSegment(points, opening.wallPointId, opening.offsetCm, opening.widthCm);
             if (!segment) return null;
-            const color = OPENING_COLORS[opening.kind];
+            const color = openingStyle(opening.kind).color;
             const hinge = opening.opensTo === 'left' ? segment.start : segment.end;
             const other = opening.opensTo === 'left' ? segment.end : segment.start;
             const leafPoints = [hinge, other, ...doorArc(hinge, other, centroid, opening.widthCm)];

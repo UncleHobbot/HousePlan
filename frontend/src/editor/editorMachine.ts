@@ -34,13 +34,6 @@ export function snapPoint(
   return { x, y };
 }
 
-export function contourCentroid(points: Point[]): { x: number; y: number } {
-  return {
-    x: points.reduce((sum, point) => sum + point.x, 0) / Math.max(1, points.length),
-    y: points.reduce((sum, point) => sum + point.y, 0) / Math.max(1, points.length),
-  };
-}
-
 export function projectOntoWall(raw: { x: number; y: number }, start: Point, end: Point) {
   const vx = end.x - start.x;
   const vy = end.y - start.y;

@@ -13,26 +13,11 @@ import {
   unplaceObject,
 } from '@houseplan/shared';
 import { createViewport } from './editor/roomCanvas/viewport';
+import { contourCentroid, wallThicknessBands, withAlpha, zoneStyle } from './planScene';
 
 const STAGE_WIDTH = 960;
 const STAGE_HEIGHT = 560;
 const STAGE_PADDING = 60;
-
-const ZONE_COLORS: Record<string, string> = {
-  stairs: '#7c3aed',
-  builtInWardrobe: '#0d9488',
-  fireplace: '#ea580c',
-  decorativeWall: '#db2777',
-  partition: '#dc2626',
-  other: '#ca8a04',
-};
-
-function withAlpha(color: string, alpha: number): string {
-  const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(color);
-  if (!match) return color;
-  const [, red, green, blue] = match;
-  return `rgba(${Number.parseInt(red, 16)}, ${Number.parseInt(green, 16)}, ${Number.parseInt(blue, 16)}, ${alpha})`;
-}
 
 /**
  * План этажа с расстановкой: объекты перетаскиваются мышью, при выборе —
@@ -229,11 +214,8 @@ export function FloorView({
         >
           <Layer>
             {zones.map((zone, zoneIndex) => {
-              const color = ZONE_COLORS[zone.kind] ?? '#ca8a04';
-              const center = {
-                x: zone.points.reduce((sum, point) => sum + point.x, 0) / zone.points.length,
-                y: zone.points.reduce((sum, point) => sum + point.y, 0) / zone.points.length,
-              };
+              const color = zoneStyle(zone.kind).color;
+              const center = contourCentroid(zone.points);
               const label = viewport.toCanvas(center);
               return (
                 <Group key={`${zone.id}-${zoneIndex}`}>

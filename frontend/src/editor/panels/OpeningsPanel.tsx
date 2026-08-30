@@ -1,5 +1,5 @@
 import type { Opening, OpeningKind } from '@houseplan/shared';
-import { OPENING_LABELS } from '../editorConstants';
+import { OPENING_LABELS } from '../../planScene';
 
 export function OpeningsPanel({
   shell,
