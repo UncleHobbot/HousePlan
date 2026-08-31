@@ -1,22 +1,14 @@
 import { useEffect, useState } from 'react';
-import type { Floor, Project, Room } from '@houseplan/shared';
+import type { Floor, Room } from '@houseplan/shared';
 import {
-  allocateId,
-  addFloor as addFloorToProject,
-  applySnapshot,
-  createSnapshot,
-  deleteObject,
   diffPlacements,
-  largestRoom,
-  locateObject,
   livePlacements,
   objectLocation,
-  placeObject,
   projectedZonesForFloor,
-  roomCentroid,
   roomLabel,
 } from '@houseplan/shared';
 import { api, type ImportCard, type ProjectSummary } from './api';
+import { CommitInput } from './CommitInput';
 import { FloorView } from './FloorView';
 import { RoomEditor } from './editor/RoomEditor';
 import { StockPanel } from './StockPanel';
@@ -133,7 +125,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     try {
       const result = await api.acceptImport(file, name);
       // сервер уже сохранил проект; состояние участвует в отмене
-      store.install(result.project, { history: true, dirty: false });
+      store.dispatch({ type: 'importAccepted', project: result.project });
       setImportCards(await api.listImport());
       store.say(`Объект «${result.object.name}» принят на склад с пометкой «не подтверждено».`);
     } catch (e) {
@@ -158,7 +150,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     }
     try {
       const result = await api.renameProject(name, newName);
-      store.install(result.project, { history: false, dirty: false });
+      store.dispatch({ type: 'projectRenamed', project: result.project });
       setRenaming(false);
       onRenamed(newName);
       store.say(`Проект переименован в «${newName}».`);
@@ -170,11 +162,10 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
   function rememberSnapshot() {
     if (!project) return;
     const variantName = snapName.trim() || `Вариант ${(project.counters.snapshot ?? 0) + 1}`;
-    store.update((p) => {
-      const id = allocateId(p, 'snapshot');
-      const snapshot = createSnapshot(p, id, variantName, snapNote.trim() || undefined);
-      p.counters.snapshot = id;
-      p.snapshots.push(snapshot);
+    store.dispatch({
+      type: 'snapshotCreated',
+      name: variantName,
+      note: snapNote.trim() || undefined,
     });
     setSnapName('');
     setSnapNote('');
@@ -186,16 +177,14 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     const snapshot = project.snapshots.find((s) => s.id === snapshotId);
     if (!snapshot) return;
     if (!window.confirm(`Вернуть вариант «${snapshot.name}»? Текущая расстановка будет перезаписана.`)) return;
-    store.install(applySnapshot(project, snapshot), { dirty: true });
+    store.dispatch({ type: 'snapshotRestored', snapshotId });
     setCompareWith(null);
     store.say(`Вариант «${snapshot.name}» возвращён в живой план.`);
   }
 
   function deleteSnapshot(snapshotId: number) {
     if (!project) return;
-    store.update((p) => {
-      p.snapshots = p.snapshots.filter((s) => s.id !== snapshotId);
-    });
+    store.dispatch({ type: 'snapshotDeleted', snapshotId });
     if (compareWith === snapshotId) setCompareWith(null);
   }
 
@@ -206,9 +195,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
       `Удалить этаж «${floor.name}»? Помещений: ${floor.rooms.length}.` +
       (placed > 0 ? ` Объектов на этаже: ${placed} — они вернутся на склад.` : '');
     if (!window.confirm(message)) return;
-    store.update((p) => {
-      p.floors = p.floors.filter((f) => f.id !== floor.id);
-    });
+    store.dispatch({ type: 'floorDeleted', floorId: floor.id });
     const remaining = project.floors.find((f) => f.id !== floor.id);
     setActiveFloor(remaining ? remaining.id : null);
     store.say(`Этаж «${floor.name}» удалён.`);
@@ -221,38 +208,21 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
       `Удалить помещение «${room.name}»? Зоны и двери помещения удалятся.` +
       (placed > 0 ? ` Объектов в нём: ${placed} — они вернутся на склад.` : '');
     if (!window.confirm(message)) return;
-    store.update((p) => {
-      const f = p.floors.find((f) => f.id === floor.id);
-      if (f) f.rooms = f.rooms.filter((r) => r.id !== room.id);
-    });
+    store.dispatch({ type: 'roomDeleted', floorId: floor.id, roomId: room.id });
     if (editingRoomId === room.id) setEditingRoomId(null);
     store.say(`Помещение «${room.name}» удалено.`);
   }
 
   function addFloor() {
     if (!project) return;
-    store.update((p) => {
-      const floor = addFloorToProject(p, activeFloor ?? undefined);
-      setActiveFloor(floor.id);
-    });
+    const result = store.dispatch({ type: 'floorAdded', neighbourFloorId: activeFloor ?? undefined });
+    if (result.ok && result.createdId !== undefined) setActiveFloor(result.createdId);
   }
 
   function startDrawingRoom(target: Floor) {
     if (!project) return;
-    const id = (project.counters.room ?? 0) + 1;
-    store.update((p) => {
-      const f = p.floors.find((f) => f.id === target.id)!;
-      const allocated = allocateId(p, 'room');
-      f.rooms.push({
-        id: allocated,
-        name: `Помещение ${allocated}`,
-        contour: { points: [], thicknesses: {}, locks: [], closed: false },
-        openings: [],
-        zones: [],
-        placements: [],
-      });
-      setEditingRoomId(allocated);
-    });
+    const result = store.dispatch({ type: 'roomCreated', floorId: target.id });
+    if (result.ok && result.createdId !== undefined) setEditingRoomId(result.createdId);
   }
 
   if (store.error && !project) {
@@ -392,10 +362,11 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
               counters: project.counters,
             }}
             onChange={(next) =>
-              store.update((p) => {
-                const shell = p.floors.find((f) => f.id === floor.id)!.shell;
-                shell.contour = next.contour;
-                shell.openings = next.openings;
+              store.dispatch({
+                type: 'shellEdited',
+                floorId: floor.id,
+                contour: next.contour,
+                openings: next.openings,
               })
             }
             onDone={() => setEditingShell(false)}
@@ -417,13 +388,16 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                   floorId: floor.id,
                 }}
                 onChange={(next) =>
-                  store.update((p) => {
-                    const f = p.floors.find((f) => f.id === floor.id)!;
-                    const r = f.rooms.find((r) => r.id === editingRoomId)!;
-                    r.contour = next.contour;
-                    r.openings = next.openings;
-                    if (next.kind === 'room') r.zones = next.zones;
-                  })
+                  next.kind === 'room'
+                    ? store.dispatch({
+                        type: 'roomEdited',
+                        floorId: floor.id,
+                        roomId: editingRoomId,
+                        contour: next.contour,
+                        openings: next.openings,
+                        zones: next.zones,
+                      })
+                    : undefined
                 }
                 onDone={() => setEditingRoomId(null)}
               />
@@ -432,14 +406,12 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
         ) : (
           <>
             <div className="row">
-              <input
+              <CommitInput
                 value={floor.name}
                 title="Имя этажа"
                 style={{ width: 160, fontWeight: 700 }}
-                onChange={(e) =>
-                  store.update((p) => {
-                    p.floors.find((f) => f.id === floor.id)!.name = e.target.value;
-                  })
+                onCommit={(value) =>
+                  store.dispatch({ type: 'floorRenamed', floorId: floor.id, name: String(value) })
                 }
               />
               <span className="muted">потолок: {floor.ceilingHeightCm} см</span>
@@ -456,15 +428,16 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 {floor.rooms.map((r) => (
                   <li key={r.id}>
                     <span className="row">
-                      <input
+                      <CommitInput
                         value={r.name}
                         title="Имя помещения"
                         style={{ width: 140 }}
-                        onChange={(e) =>
-                          store.update((p) => {
-                            const f = p.floors.find((f2) => f2.id === floor.id)!;
-                            const target = f.rooms.find((r2) => r2.id === r.id)!;
-                            target.name = e.target.value;
+                        onCommit={(value) =>
+                          store.dispatch({
+                            type: 'roomRenamed',
+                            floorId: floor.id,
+                            roomId: r.id,
+                            name: String(value),
                           })
                         }
                       />
@@ -487,11 +460,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 objects={project.objects}
                 projectedZones={projected}
                 highlight={highlightIds}
-                onChangeFloors={(floors) =>
-                  store.update((p) => {
-                    p.floors = floors;
-                  })
-                }
+                onIntent={store.dispatch}
               />
               <StockPanel
                 objects={project.objects}
@@ -500,41 +469,14 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 onAcceptImport={acceptImport}
                 onRejectImport={rejectImport}
                 status={(objectId) => objectLocation(project, objectId)}
-                onCreate={(object) =>
-                  store.update((p) => {
-                    const id = allocateId(p, 'object');
-                    p.counters.object = id;
-                    p.objects.push({ ...object, id });
-                  })
+                onCreate={({ id: _ignoredId, ...object }) =>
+                  store.dispatch({ type: 'objectCreated', object })
                 }
-                onUpdate={(object) =>
-                  store.update((p) => {
-                    const idx = p.objects.findIndex((o) => o.id === object.id);
-                    if (idx >= 0) p.objects[idx] = object;
-                  })
-                }
-                onClone={(object) =>
-                  store.update((p) => {
-                    const id = allocateId(p, 'object');
-                    p.counters.object = id;
-                    p.objects.push({ ...structuredClone(object), id, name: object.name + ' (копия)' });
-                  })
-                }
-                onDelete={(objectId) =>
-                  store.update((p) => {
-                    const cleaned = deleteObject(p, objectId);
-                    p.objects = cleaned.objects;
-                    p.floors = cleaned.floors;
-                  })
-                }
+                onUpdate={(object) => store.dispatch({ type: 'objectUpdated', object })}
+                onClone={(object) => store.dispatch({ type: 'objectCloned', objectId: object.id })}
+                onDelete={(objectId) => store.dispatch({ type: 'objectDeleted', objectId })}
                 onPlace={(objectId) =>
-                  store.update((p) => {
-                    const target = p.floors.find((f2) => f2.id === floor.id)!;
-                    const room = largestRoom(target);
-                    if (!room) return;
-                    const next = placeObject(p, objectId, target.id, roomCentroid(room), room.id);
-                    if (next) p.floors = next.floors;
-                  })
+                  store.dispatch({ type: 'objectPlacedInLargestRoom', objectId, floorId: floor.id })
                 }
               />
             </div>

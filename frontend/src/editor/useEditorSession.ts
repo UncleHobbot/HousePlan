@@ -34,7 +34,7 @@ const INITIAL_BANNER: Banner = {
 
 export function useEditorSession({ plan, onChange }: Pick<RoomEditorProps, 'plan' | 'onChange'>) {
   const counters = plan.counters;
-  /** Спекулятивный идентификатор из счётчиков проекта; точку поднимет rebaseCounters при применении. */
+  /** Черновой идентификатор; постоянный ID подтвердит или перевыдаст projectSession. */
   function nextId(kind: 'point' | 'opening' | 'zone'): number {
     const base = Math.max(idSeq.current[kind] ?? 0, counters[kind] ?? 0);
     idSeq.current[kind] = base + 1;

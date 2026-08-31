@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AssistantCard, ObjectCategory, SceneObject } from '@houseplan/shared';
 import { NO_CLEARANCE } from '@houseplan/shared';
+import { CommitInput } from './CommitInput';
 
 const CATEGORY_LABELS: Record<ObjectCategory, string> = {
   sofa: 'Диван',
@@ -153,7 +154,7 @@ export function StockPanel({
                 <div>
                   <h3>Свойства</h3>
                   <div className="row">
-                    <input value={o.name} onChange={(e) => onUpdate({ ...o, name: e.target.value })} style={{ minWidth: 150 }} />
+                    <CommitInput value={o.name} onCommit={(value) => onUpdate({ ...o, name: String(value) })} style={{ minWidth: 150 }} />
                     <select value={o.category} onChange={(e) => onUpdate({ ...o, category: e.target.value as ObjectCategory })}>
                       {Object.entries(CATEGORY_LABELS).map(([k, label]) => (
                         <option key={k} value={k}>{label}</option>
@@ -162,16 +163,16 @@ export function StockPanel({
                     <input type="color" value={o.color || '#0e7490'} onChange={(e) => onUpdate({ ...o, color: e.target.value })} style={{ width: 40, padding: 0 }} />
                   </div>
                   <div className="row">
-                    Ш <input type="number" style={{ width: 70 }} value={o.widthCm} onChange={(e) => onUpdate({ ...o, widthCm: Number(e.target.value) })} />
-                    Г <input type="number" style={{ width: 70 }} value={o.depthCm} onChange={(e) => onUpdate({ ...o, depthCm: Number(e.target.value) })} />
-                    В <input type="number" style={{ width: 70 }} value={o.heightCm} onChange={(e) => onUpdate({ ...o, heightCm: Number(e.target.value) })} />
+                    Ш <CommitInput type="number" style={{ width: 70 }} value={o.widthCm} onCommit={(value) => onUpdate({ ...o, widthCm: Number(value) })} />
+                    Г <CommitInput type="number" style={{ width: 70 }} value={o.depthCm} onCommit={(value) => onUpdate({ ...o, depthCm: Number(value) })} />
+                    В <CommitInput type="number" style={{ width: 70 }} value={o.heightCm} onCommit={(value) => onUpdate({ ...o, heightCm: Number(value) })} />
                   </div>
                   <h3>Допуск (см)</h3>
                   <div className="row">
-                    перед <input type="number" style={{ width: 60 }} value={o.clearances.front} onChange={(e) => onUpdate({ ...o, clearances: { ...o.clearances, front: Number(e.target.value) } })} />
-                    за <input type="number" style={{ width: 60 }} value={o.clearances.back} onChange={(e) => onUpdate({ ...o, clearances: { ...o.clearances, back: Number(e.target.value) } })} />
-                    слева <input type="number" style={{ width: 60 }} value={o.clearances.left} onChange={(e) => onUpdate({ ...o, clearances: { ...o.clearances, left: Number(e.target.value) } })} />
-                    справа <input type="number" style={{ width: 60 }} value={o.clearances.right} onChange={(e) => onUpdate({ ...o, clearances: { ...o.clearances, right: Number(e.target.value) } })} />
+                    перед <CommitInput type="number" style={{ width: 60 }} value={o.clearances.front} onCommit={(value) => onUpdate({ ...o, clearances: { ...o.clearances, front: Number(value) } })} />
+                    за <CommitInput type="number" style={{ width: 60 }} value={o.clearances.back} onCommit={(value) => onUpdate({ ...o, clearances: { ...o.clearances, back: Number(value) } })} />
+                    слева <CommitInput type="number" style={{ width: 60 }} value={o.clearances.left} onCommit={(value) => onUpdate({ ...o, clearances: { ...o.clearances, left: Number(value) } })} />
+                    справа <CommitInput type="number" style={{ width: 60 }} value={o.clearances.right} onCommit={(value) => onUpdate({ ...o, clearances: { ...o.clearances, right: Number(value) } })} />
                   </div>
                 </div>
               )}

@@ -1,151 +1,87 @@
-import { useEffect, useRef, useState } from 'react';
-import type { Project } from '@houseplan/shared';
-import { rebaseCounters } from '@houseplan/shared';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { api } from './api';
-
-const HISTORY_LIMIT = 50;
+import { createProjectSession, type ProjectIntent } from './projectSession';
 
 /**
- * Хранилище проекта: состояние, история отмены/возврата, сохранение.
- * Страница проекта остаётся раскладкой; правила — здесь и в shared.
+ * Тонкий React-адаптер browser-сессии. Сеть и русские сообщения принадлежат UI;
+ * проект, история, ревизии и правила переходов принадлежат projectSession.
  */
 export function useProjectStore(name: string) {
-  const [project, setProject] = useState<Project | null>(null);
+  const session = useMemo(() => createProjectSession(), [name]);
+  const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [dirty, setDirty] = useState(false);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
-  const historyRef = useRef<Project[]>([]);
-  const redoRef = useRef<Project[]>([]);
-  const projectRef = useRef<Project | null>(null);
 
-  projectRef.current = project;
-
-  function say(text: string) {
-    setNotice(text);
-  }
-
-  // Загрузка проекта при открытии страницы
   useEffect(() => {
     let cancelled = false;
     setError('');
     api
       .readProject(name)
-      .then((loaded) => {
-        if (cancelled) return;
-        rebaseCounters(loaded);
-        setProject(loaded);
+      .then((project) => {
+        if (!cancelled) session.dispatch({ type: 'projectLoaded', project });
       })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
       });
     return () => {
       cancelled = true;
     };
-  }, [name]);
-
-  function pushHistory(current: Project) {
-    historyRef.current.push(current);
-    if (historyRef.current.length > HISTORY_LIMIT) historyRef.current.shift();
-    redoRef.current = [];
-    setCanUndo(true);
-    setCanRedo(false);
-  }
-
-  /** Изменить живой план (пишется в историю отмены). */
-  function update(change: (p: Project) => void) {
-    const current = projectRef.current;
-    if (!current) return;
-    pushHistory(current);
-    const copy = structuredClone(current);
-    change(copy);
-    rebaseCounters(copy);
-    setProject(copy);
-    setDirty(true);
-  }
+  }, [name, session]);
 
   function undo() {
-    const previous = historyRef.current.pop();
-    const current = projectRef.current;
-    if (!previous || !current) return;
-    redoRef.current.push(current);
-    rebaseCounters(previous);
-    setProject(previous);
-    setDirty(true);
-    setCanUndo(historyRef.current.length > 0);
-    setCanRedo(true);
-    say('Действие отменено.');
+    const result = session.dispatch({ type: 'undo' });
+    if (result.ok) setNotice('Действие отменено.');
   }
 
   function redo() {
-    const next = redoRef.current.pop();
-    const current = projectRef.current;
-    if (!next || !current) return;
-    historyRef.current.push(current);
-    rebaseCounters(next);
-    setProject(next);
-    setDirty(true);
-    setCanUndo(true);
-    setCanRedo(redoRef.current.length > 0);
-    say('Действие возвращено.');
+    const result = session.dispatch({ type: 'redo' });
+    if (result.ok) setNotice('Действие возвращено.');
   }
 
   async function save() {
-    const current = projectRef.current;
-    if (!current) return;
+    const request = session.getSnapshot();
+    if (!request.project || request.gestureActive) return;
     try {
-      await api.saveProject(name, current);
-      setDirty(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      await api.saveProject(name, request.project);
+      session.dispatch({ type: 'saveAcknowledged', revision: request.revision });
+      setError('');
+    } catch (reason) {
+      session.dispatch({ type: 'saveRejected', revision: request.revision });
+      setError(reason instanceof Error ? reason.message : String(reason));
     }
   }
 
-  /**
-   * Установить проект целиком — для состояний, приходящих извне
-   * (возврат варианта, приём импорта, переименование).
-   * history: записать ли прежнее состояние в историю отмены.
-   */
-  function install(next: Project, options: { history?: boolean; dirty?: boolean } = {}) {
-    const { history = true, dirty = true } = options;
-    const current = projectRef.current;
-    if (history && current) pushHistory(current);
-    rebaseCounters(next);
-    setProject(next);
-    setDirty(dirty);
-  }
-
-  // Отмена и возврат — Ctrl+Z / Ctrl+Y
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey)) return;
       const key = event.key.toLowerCase();
       if (key === 'z' && !event.shiftKey) {
         event.preventDefault();
-        undo();
+        const result = session.dispatch({ type: 'undo' });
+        if (result.ok) setNotice('Действие отменено.');
       } else if ((key === 'z' && event.shiftKey) || key === 'y') {
         event.preventDefault();
-        redo();
+        const result = session.dispatch({ type: 'redo' });
+        if (result.ok) setNotice('Действие возвращено.');
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, [session]);
+
+  function dispatch(intent: ProjectIntent) {
+    return session.dispatch(intent);
+  }
 
   return {
-    project,
+    ...state,
     error,
     setError,
     notice,
-    say,
-    dirty,
-    canUndo,
-    canRedo,
-    update,
+    say: setNotice,
+    dispatch,
     undo,
     redo,
     save,
-    install,
   };
 }

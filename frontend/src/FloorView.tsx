@@ -1,20 +1,18 @@
 import { useRef, useState } from 'react';
 import type Konva from 'konva';
 import { Group, Layer, Line, Stage, Text } from 'react-konva';
-import type { Floor, Project, SceneObject, Zone } from '@houseplan/shared';
+import type { Project, SceneObject, Zone } from '@houseplan/shared';
 import {
   bodyPolygon,
   clearancePolygon,
   conflictObjectIds,
   locateObject,
   openingSegment,
-  placeObject,
   roomAt,
-  rotateObject,
-  unplaceObject,
 } from '@houseplan/shared';
 import { createViewport } from './editor/roomCanvas/viewport';
 import { contourCentroid, wallThicknessBands, withAlpha, zoneStyle } from './planScene';
+import type { ProjectIntent, ProjectSessionResult } from './projectSession';
 
 const STAGE_WIDTH = 960;
 const STAGE_HEIGHT = 560;
@@ -32,7 +30,7 @@ export function FloorView({
   objects,
   projectedZones,
   highlight,
-  onChangeFloors,
+  onIntent,
 }: {
   project: Project;
   floorId: number;
@@ -40,7 +38,7 @@ export function FloorView({
   projectedZones?: Zone[];
   /** объекты, помеченные сравнением вариантов (переехали или добавлены) */
   highlight?: Set<number>;
-  onChangeFloors: (floors: Floor[]) => void;
+  onIntent: (intent: ProjectIntent) => ProjectSessionResult;
 }) {
   const floor = project.floors.find((f) => f.id === floorId) ?? null;
   const [selected, setSelected] = useState<number | null>(null);
@@ -105,18 +103,24 @@ export function FloorView({
     const roomId = roomAt(activeFloor, x, y) ?? located?.room.id;
     if (roomId === undefined) return;
     const rotation = located?.placement.rotationDeg ?? 0;
-    const next = placeObject(project, objectId, floorId, { x, y }, roomId, rotation);
-    if (next) onChangeFloors(next.floors);
+    onIntent({
+      type: 'placementMovePreviewed',
+      objectId,
+      floorId,
+      roomId,
+      x,
+      y,
+      rotationDeg: rotation,
+    });
   }
 
   function rotateSelected(delta: number) {
-    const next = rotateObject(project, selected!, delta);
-    if (next) onChangeFloors(next.floors);
+    if (selected !== null) onIntent({ type: 'objectRotated', objectId: selected, deltaDeg: delta });
   }
 
   function removeFromPlan() {
     if (selected === null) return;
-    onChangeFloors(unplaceObject(project, selected).floors);
+    onIntent({ type: 'objectUnplaced', objectId: selected });
     setSelected(null);
   }
 
@@ -128,6 +132,8 @@ export function FloorView({
   ) {
     const point = pointerInPlan();
     if (!point) return;
+    const started = onIntent({ type: 'placementMoveStarted', objectId });
+    if (!started.ok) return;
     dragRef.current = { objectId, dx: point.x - x, dy: point.y - y };
     setSelected(objectId);
     event.cancelBubble = true;
@@ -141,8 +147,7 @@ export function FloorView({
     if (!point) return;
     const roomId = roomAt(activeFloor, point.x, point.y);
     if (roomId === null) return;
-    const next = placeObject(project, objectId, floorId, point, roomId);
-    if (next) onChangeFloors(next.floors);
+    onIntent({ type: 'objectPlaced', objectId, floorId, roomId, x: point.x, y: point.y });
   }
 
   return (
@@ -178,9 +183,11 @@ export function FloorView({
             }
           }}
           onMouseUp={() => {
+            if (dragRef.current) onIntent({ type: 'gestureCommitted' });
             dragRef.current = null;
           }}
           onMouseLeave={() => {
+            if (dragRef.current) onIntent({ type: 'gestureCancelled' });
             dragRef.current = null;
           }}
           onClick={() => setSelected(null)}
