@@ -11,6 +11,7 @@ import { api, type ImportCard, type ProjectSummary } from './api';
 import { CommitInput } from './CommitInput';
 import { FloorView } from './FloorView';
 import { RoomEditor } from './editor/RoomEditor';
+import type { EditorCommitRequest, EditorCommitResult } from './editor/editorSession';
 import { StockPanel } from './StockPanel';
 import { useProjectStore } from './useProjectStore';
 
@@ -225,6 +226,98 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     if (result.ok && result.createdId !== undefined) setEditingRoomId(result.createdId);
   }
 
+  function commitShell(floorId: number, request: EditorCommitRequest): EditorCommitResult {
+    const result = store.dispatch({
+      type: 'shellEdited',
+      floorId,
+      expectedRevision: request.expectedRevision,
+      contour: request.plan.contour,
+      openings: request.plan.openings,
+    });
+    if (!result.ok) {
+      const current = (result.project ?? store.project)?.floors.find((item) => item.id === floorId);
+      return {
+        ok: false,
+        revision: result.revision,
+        code: result.code,
+        ...(current ? {
+          plan: {
+            kind: 'shell' as const,
+            name: request.plan.name,
+            contour: current.shell.contour,
+            openings: current.shell.openings,
+            openingKinds: ['window', 'entryDoor'] as const,
+          },
+        } : {}),
+      };
+    }
+    const updated = result.project?.floors.find((item) => item.id === floorId);
+    if (!updated) return { ok: false, revision: result.revision, code: 'floor-not-found' };
+    return {
+      ok: true,
+      revision: result.revision,
+      plan: {
+        kind: 'shell',
+        name: request.plan.name,
+        contour: updated.shell.contour,
+        openings: updated.shell.openings,
+        openingKinds: ['window', 'entryDoor'],
+      },
+    };
+  }
+
+  function commitRoom(floorId: number, roomId: number, request: EditorCommitRequest): EditorCommitResult {
+    if (request.plan.kind !== 'room') return { ok: false, revision: request.expectedRevision, code: 'room-plan-required' };
+    const result = store.dispatch({
+      type: 'roomEdited',
+      floorId,
+      roomId,
+      expectedRevision: request.expectedRevision,
+      contour: request.plan.contour,
+      openings: request.plan.openings,
+      zones: request.plan.zones,
+    });
+    if (!result.ok) {
+      const currentProject = result.project ?? store.project;
+      const currentFloor = currentProject?.floors.find((item) => item.id === floorId);
+      const currentRoom = currentFloor?.rooms.find((item) => item.id === roomId);
+      return {
+        ok: false,
+        revision: result.revision,
+        code: result.code,
+        ...(currentFloor && currentRoom && currentProject ? {
+          plan: {
+            kind: 'room' as const,
+            name: currentRoom.name,
+            contour: currentRoom.contour,
+            openings: currentRoom.openings,
+            openingKinds: ['innerDoor'] as const,
+            zones: currentRoom.zones,
+            floors: currentProject.floors,
+            floorId,
+          },
+        } : {}),
+      };
+    }
+    const updatedFloor = result.project?.floors.find((item) => item.id === floorId);
+    const updatedRoom = updatedFloor?.rooms.find((item) => item.id === roomId);
+    if (!updatedFloor || !updatedRoom || !result.project) return { ok: false, revision: result.revision, code: 'room-not-found' };
+    return {
+      ok: true,
+      revision: result.revision,
+      plan: {
+        kind: 'room',
+        name: updatedRoom.name,
+        contour: updatedRoom.contour,
+        openings: updatedRoom.openings,
+        openingKinds: ['innerDoor'],
+        zones: updatedRoom.zones,
+        floors: result.project.floors,
+        floorId,
+      },
+    };
+  }
+
   if (store.error && !project) {
     return (
       <div className="page">
@@ -359,16 +452,9 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
               contour: floor.shell.contour,
               openings: floor.shell.openings,
               openingKinds: ['window', 'entryDoor'],
-              counters: project.counters,
             }}
-            onChange={(next) =>
-              store.dispatch({
-                type: 'shellEdited',
-                floorId: floor.id,
-                contour: next.contour,
-                openings: next.openings,
-              })
-            }
+            revision={store.revision}
+            onCommit={(request) => commitShell(floor.id, request)}
             onDone={() => setEditingShell(false)}
           />
         ) : editingRoomId !== null && floor.rooms.some((r) => r.id === editingRoomId) ? (
@@ -382,23 +468,12 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                   contour: room.contour,
                   openings: room.openings,
                   openingKinds: ['innerDoor'],
-                  counters: project.counters,
                   zones: room.zones,
                   floors: project.floors,
                   floorId: floor.id,
                 }}
-                onChange={(next) =>
-                  next.kind === 'room'
-                    ? store.dispatch({
-                        type: 'roomEdited',
-                        floorId: floor.id,
-                        roomId: editingRoomId,
-                        contour: next.contour,
-                        openings: next.openings,
-                        zones: next.zones,
-                      })
-                    : undefined
-                }
+                revision={store.revision}
+                onCommit={(request) => commitRoom(floor.id, editingRoomId, request)}
                 onDone={() => setEditingRoomId(null)}
               />
             );

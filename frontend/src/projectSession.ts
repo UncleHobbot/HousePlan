@@ -37,8 +37,8 @@ export type ProjectIntent =
   | { type: 'roomCreated'; floorId: number }
   | { type: 'roomDeleted'; floorId: number; roomId: number }
   | { type: 'roomRenamed'; floorId: number; roomId: number; name: string }
-  | { type: 'shellEdited'; floorId: number; contour: Contour; openings: Opening[] }
-  | { type: 'roomEdited'; floorId: number; roomId: number; contour: Contour; openings: Opening[]; zones: Zone[] }
+  | { type: 'shellEdited'; floorId: number; expectedRevision: number; contour: Contour; openings: Opening[] }
+  | { type: 'roomEdited'; floorId: number; roomId: number; expectedRevision: number; contour: Contour; openings: Opening[]; zones: Zone[] }
   | { type: 'snapshotCreated'; name: string; note?: string }
   | { type: 'snapshotRestored'; snapshotId: number }
   | { type: 'snapshotDeleted'; snapshotId: number }
@@ -67,13 +67,14 @@ export type ProjectSessionFailureCode =
   | 'gesture-not-active'
   | 'gesture-mismatch'
   | 'invalid-revision'
+  | 'stale-revision'
   | 'nothing-to-undo'
   | 'nothing-to-redo'
   | 'no-change';
 
 export type ProjectSessionResult =
-  | { ok: true; revision: number; createdId?: number }
-  | { ok: false; revision: number; code: ProjectSessionFailureCode };
+  | { ok: true; revision: number; createdId?: number; project?: Project }
+  | { ok: false; revision: number; code: ProjectSessionFailureCode; project?: Project };
 
 export interface ProjectSessionSnapshot {
   /** Глубоко замороженный снимок: изменять его вне сессии нельзя. */
@@ -236,12 +237,22 @@ export function createProjectSession(): ProjectSession {
     listeners.forEach((listener) => listener());
   }
 
-  function success(createdId?: number): ProjectSessionResult {
-    return createdId === undefined ? { ok: true, revision } : { ok: true, revision, createdId };
+  function success(createdId?: number, resultProject?: Project): ProjectSessionResult {
+    return {
+      ok: true,
+      revision,
+      ...(createdId === undefined ? {} : { createdId }),
+      ...(resultProject === undefined ? {} : { project: resultProject }),
+    };
   }
 
-  function failure(code: ProjectSessionFailureCode): ProjectSessionResult {
-    return { ok: false, revision, code };
+  function failure(code: ProjectSessionFailureCode, returnProject = false): ProjectSessionResult {
+    return {
+      ok: false,
+      revision,
+      code,
+      ...(returnProject && project ? { project } : {}),
+    };
   }
 
   function reset(next: Project): ProjectSessionResult {
@@ -261,7 +272,7 @@ export function createProjectSession(): ProjectSession {
     redo = [];
   }
 
-  function commit(next: Project, createdId?: number): ProjectSessionResult {
+  function commit(next: Project, createdId?: number, returnProject = false): ProjectSessionResult {
     if (!project) return failure('project-not-loaded');
     rebaseCounters(next);
     if (sameProject(project, next)) return failure('no-change');
@@ -269,7 +280,7 @@ export function createProjectSession(): ProjectSession {
     project = freezeProject(next);
     revision += 1;
     publish();
-    return success(createdId);
+    return success(createdId, returnProject ? project : undefined);
   }
 
   function editableProject(): Project | null {
@@ -294,6 +305,13 @@ export function createProjectSession(): ProjectSession {
     }
 
     if (!project) return failure('project-not-loaded');
+
+    if (
+      (intent.type === 'shellEdited' || intent.type === 'roomEdited')
+      && intent.expectedRevision !== revision
+    ) {
+      return failure('stale-revision', true);
+    }
 
     if (intent.type === 'saveAcknowledged') {
       if (intent.revision < 0 || intent.revision > revision) return failure('invalid-revision');
@@ -429,7 +447,7 @@ export function createProjectSession(): ProjectSession {
         const floor = next.floors.find((item) => item.id === intent.floorId);
         if (!floor) return failure('floor-not-found');
         floor.shell = adoptShell(next, intent, floor.shell);
-        return commit(next);
+        return commit(next, undefined, true);
       }
       case 'roomEdited': {
         const floor = next.floors.find((item) => item.id === intent.floorId);
@@ -437,7 +455,7 @@ export function createProjectSession(): ProjectSession {
         const room = floor.rooms.find((item) => item.id === intent.roomId);
         if (!room) return failure('room-not-found');
         Object.assign(room, adoptRoomPlan(next, intent, room));
-        return commit(next);
+        return commit(next, undefined, true);
       }
       case 'snapshotCreated': {
         const id = allocateId(next, 'snapshot');

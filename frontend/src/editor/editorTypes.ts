@@ -1,29 +1,12 @@
-import type { Contour, Floor, Opening, OpeningKind, Point, ProjectCounters, Zone, ZoneKind } from '@houseplan/shared';
+import type { Point, ZoneKind } from '@houseplan/shared';
+import type { EditorCommitRequest, EditorCommitResult, EditorPlan } from './editorSession';
 
-export type EditablePlan =
-  | {
-      kind: 'shell';
-      name: string;
-      contour: Contour;
-      openings: Opening[];
-      openingKinds: Extract<OpeningKind, 'window' | 'entryDoor'>[];
-      counters: ProjectCounters;
-    }
-  | {
-      kind: 'room';
-      name: string;
-      contour: Contour;
-      openings: Opening[];
-      openingKinds: Extract<OpeningKind, 'innerDoor'>[];
-      zones: Zone[];
-      floors: Floor[];
-      floorId: number;
-      counters: ProjectCounters;
-    };
+export type EditablePlan = EditorPlan;
 
 export interface RoomEditorProps {
   plan: EditablePlan;
-  onChange: (plan: EditablePlan) => void;
+  revision: number;
+  onCommit: (request: EditorCommitRequest) => EditorCommitResult;
   onDone: () => void;
 }
 

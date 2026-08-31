@@ -1,17 +1,16 @@
-import { lockLabel, type Contour, type SizeLock } from '@houseplan/shared';
+import { lockLabel, type SizeLock } from '@houseplan/shared';
+import type { EditorIntent } from '../editorSession';
 
-export function LocksPanel({ contour, onRemove }: { contour: Contour; onRemove: (lock: SizeLock) => void }) {
+export function LocksPanel({ locks, dispatch }: { locks: SizeLock[]; dispatch: (intent: EditorIntent) => unknown }) {
   return (
     <div className="card grow">
       <h2>Замки</h2>
-      {contour.locks.length === 0 ? (
-        <p className="muted">Ни один размер не прибит.</p>
-      ) : (
+      {locks.length === 0 ? <p className="muted">Ни один размер не прибит.</p> : (
         <ul className="locks">
-          {contour.locks.map((lock) => (
+          {locks.map((lock) => (
             <li key={`${lock.aId}-${lock.bId}`}>
               <span>{lockLabel(lock)}</span>
-              <button onClick={() => onRemove(lock)}>снять</button>
+              <button onClick={() => dispatch({ type: 'lockRemoved', lock })}>снять</button>
             </li>
           ))}
         </ul>

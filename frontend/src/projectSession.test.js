@@ -162,6 +162,7 @@ test('сессия перевыдаёт постоянные ID новым эл�
     type: 'roomEdited',
     floorId: 1,
     roomId: 1,
+    expectedRevision: session.getSnapshot().revision,
     contour,
     openings,
     zones: [],
@@ -172,4 +173,26 @@ test('сессия перевыдаёт постоянные ID новым эл�
   assert.notEqual(addedPoint.id, 50);
   assert.equal(changed.openings[0].wallPointId, addedPoint.id);
   assert.equal(changed.contour.thicknesses[addedPoint.id], 10);
+});
+
+test('результат редактора от устаревшей ревизии не перезаписывает новый проект', () => {
+  const session = createProjectSession();
+  session.dispatch({ type: 'projectLoaded', project: projectWithRoom() });
+  const editorRevision = session.getSnapshot().revision;
+  session.dispatch({ type: 'floorRenamed', floorId: 1, name: 'Изменён снаружи' });
+  const current = session.getSnapshot();
+
+  const result = session.dispatch({
+    type: 'shellEdited',
+    floorId: 1,
+    expectedRevision: editorRevision,
+    contour: current.project.floors[0].shell.contour,
+    openings: [],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.revision, current.revision);
+  assert.equal(result.code, 'stale-revision');
+  assert.equal(result.project.floors[0].name, 'Изменён снаружи');
+  assert.equal(session.getSnapshot().project.floors[0].name, 'Изменён снаружи');
 });

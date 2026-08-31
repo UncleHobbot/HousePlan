@@ -1,30 +1,19 @@
-import { Fragment } from 'react';
-import { canSlide, lockedWalls, openingSegment, type Contour, type Opening, type Point, type Zone } from '@houseplan/shared';
+import { Fragment, useRef } from 'react';
+import type Konva from 'konva';
+import { canSlide, lockedWalls, openingSegment } from '@houseplan/shared';
 import { Circle, Layer, Line, Rect, Stage, Text } from 'react-konva';
 import { GRID_CM } from '../editorConstants';
 import { contourCentroid, wallThicknessBands, withAlpha, zoneStyle, openingStyle } from '../../planScene';
-import type { CanvasPointerEvent, DimensionSelection, ZoneDraft } from '../editorTypes';
+import type { CanvasPointerEvent } from '../editorTypes';
+import type { EditorDispatchResult, EditorIntent, EditorSessionSnapshot } from '../editorSession';
 import { createViewport, type CanvasPoint } from './viewport';
 
 const WIDTH = 960;
 const HEIGHT = 560;
 
 export interface RoomCanvasProps {
-  contour: Contour;
-  zones: Zone[];
-  openings: Opening[];
-  draft: ZoneDraft | null;
-  pointer: { x: number; y: number } | null;
-  selection: DimensionSelection;
-  snap: boolean;
-  invalid: boolean;
-  cursor: string;
-  crossedWalls: ReadonlySet<number>;
-  onPointerMove: (position: { x: number; y: number }) => void;
-  onPointerLeave: () => void;
-  onClick: (event: CanvasPointerEvent) => void;
-  onPointerDown: (event: CanvasPointerEvent) => void;
-  onContextMenu: (event: CanvasPointerEvent) => void;
+  snapshot: EditorSessionSnapshot;
+  dispatch: (intent: EditorIntent) => EditorDispatchResult;
 }
 
 function doorArc(
@@ -55,7 +44,14 @@ function doorArc(
 }
 
 export function RoomCanvas(props: RoomCanvasProps) {
-  const { contour, zones, openings, draft, pointer, selection } = props;
+  const pendingDrag = useRef<{ pointerId: number; x: number; y: number; started: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const { plan, canvas, tool } = props.snapshot;
+  const contour = plan.contour;
+  const zones = plan.kind === 'room' ? plan.zones : [];
+  const openings = plan.openings;
+  const draft = tool.kind === 'polygonZone' || tool.kind === 'partition' ? tool.draft : null;
+  const { pointer, selection } = canvas;
   const points = contour.points;
   const viewportPoints = [...points, ...zones.flatMap((zone) => zone.points), ...(draft?.points ?? [])];
   const viewport = createViewport(viewportPoints, {
@@ -84,6 +80,21 @@ export function RoomCanvas(props: RoomCanvasProps) {
     };
   }
 
+  function dragHandler(target: Extract<CanvasPointerEvent['target'], { kind: 'point' | 'zoneVertex' }>) {
+    return (event: Konva.KonvaEventObject<PointerEvent>) => {
+      const stage = event.target.getStage();
+      if (!stage) return;
+      event.cancelBubble = true;
+      const result = props.dispatch({
+        type: 'pointerPressed',
+        event: { position: pointerPosition(stage), target },
+      });
+      if (result.ok) {
+        pendingDrag.current = { pointerId: event.evt.pointerId, x: event.evt.clientX, y: event.evt.clientY, started: false };
+      }
+    };
+  }
+
   const origin = viewport.toCanvas({ x: 0, y: 0 });
   const gridStep = GRID_CM * viewport.scale;
   const verticalGrid = Array.from({ length: Math.ceil(WIDTH / gridStep) + 2 }, (_, index) => {
@@ -97,35 +108,65 @@ export function RoomCanvas(props: RoomCanvasProps) {
 
   return (
     <div
-      className={props.invalid ? 'plan bad' : 'plan'}
-      style={{ cursor: props.cursor, overflow: 'hidden' }}
+      className={props.snapshot.dimension.invalid ? 'plan bad' : 'plan'}
+      style={{ cursor: canvas.cursor, overflow: 'hidden' }}
       onContextMenu={(event) => event.preventDefault()}
+      onClickCapture={(event) => {
+        if (!suppressClick.current) return;
+        suppressClick.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onPointerMoveCapture={(event) => {
+        const pending = pendingDrag.current;
+        if (pending && pending.pointerId === event.pointerId) {
+          if (!pending.started && Math.hypot(event.clientX - pending.x, event.clientY - pending.y) < 3) return;
+          if (!pending.started) {
+            pending.started = true;
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }
+        }
+        const bounds = event.currentTarget.getBoundingClientRect();
+        props.dispatch({
+          type: 'pointerMoved',
+          position: viewport.toWorld({ x: event.clientX - bounds.left, y: event.clientY - bounds.top }),
+        });
+      }}
+      onPointerUpCapture={(event) => {
+        if (pendingDrag.current?.started) {
+          suppressClick.current = true;
+          window.setTimeout(() => { suppressClick.current = false; }, 0);
+        }
+        props.dispatch({ type: 'pointerReleased' });
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        pendingDrag.current = null;
+      }}
+      onPointerCancel={() => {
+        pendingDrag.current = null;
+        props.dispatch({ type: 'pointerCancelled' });
+      }}
     >
       <Stage
         width={WIDTH}
         height={HEIGHT}
-        onMouseMove={(event) => props.onPointerMove(pointerPosition(event.target.getStage()!))}
-        onMouseLeave={props.onPointerLeave}
+        onMouseLeave={() => props.dispatch({ type: 'pointerLeft' })}
         onClick={(event) => {
           if (event.target === event.target.getStage()) {
-            props.onClick({ position: pointerPosition(event.target.getStage()!), target: { kind: 'canvas' } });
+            props.dispatch({ type: 'canvasClicked', event: { position: pointerPosition(event.target.getStage()!), target: { kind: 'canvas' } } });
           }
         }}
         onContextMenu={(event) => {
           if (event.target === event.target.getStage()) {
-            props.onContextMenu({ position: pointerPosition(event.target.getStage()!), target: { kind: 'canvas' } });
-          }
-        }}
-        onMouseDown={(event) => {
-          if (event.target === event.target.getStage()) {
-            props.onPointerDown({ position: pointerPosition(event.target.getStage()!), target: { kind: 'canvas' } });
+            event.cancelBubble = true;
           }
         }}
       >
         <Layer>
           <Rect width={WIDTH} height={HEIGHT} fill="#fff" listening={false} />
-          {props.snap && verticalGrid}
-          {props.snap && horizontalGrid}
+          {canvas.snap && verticalGrid}
+          {canvas.snap && horizontalGrid}
 
           {zones.map((zone) => {
             const color = zoneStyle(zone.kind).color;
@@ -146,8 +187,10 @@ export function RoomCanvas(props: RoomCanvasProps) {
                       fill="#fff"
                       stroke={color}
                       strokeWidth={2}
-                      onMouseDown={semanticHandler({ kind: 'zoneVertex', zoneId: zone.id, pointId: point.id }, props.onPointerDown)}
-                      onClick={semanticHandler({ kind: 'zoneVertex', zoneId: zone.id, pointId: point.id }, props.onClick)}
+                      onPointerDown={tool.kind === 'select'
+                        ? dragHandler({ kind: 'zoneVertex', zoneId: zone.id, pointId: point.id })
+                        : undefined}
+                      onClick={semanticHandler({ kind: 'zoneVertex', zoneId: zone.id, pointId: point.id }, (event) => props.dispatch({ type: 'canvasClicked', event }))}
                     />
                   );
                 })}
@@ -185,14 +228,13 @@ export function RoomCanvas(props: RoomCanvasProps) {
               <Line
                 key={`wall-${point.id}`}
                 points={viewport.flatten([point, next])}
-                stroke={props.crossedWalls.has(index) ? '#dc2626' : locked ? '#134e4a' : diagonal ? '#d97706' : '#64748b'}
+                stroke={canvas.crossedWalls.includes(index) ? '#dc2626' : locked ? '#134e4a' : diagonal ? '#d97706' : '#64748b'}
                 strokeWidth={locked ? 5 : 3}
                 lineCap="round"
                 dash={diagonal ? [8, 6] : undefined}
                 hitStrokeWidth={20}
-                onClick={semanticHandler({ kind: 'wall', wallIndex: index }, props.onClick)}
-                onContextMenu={semanticHandler({ kind: 'wall', wallIndex: index }, props.onContextMenu)}
-                onMouseDown={semanticHandler({ kind: 'wall', wallIndex: index }, props.onPointerDown)}
+                onClick={semanticHandler({ kind: 'wall', wallIndex: index }, (event) => props.dispatch({ type: 'canvasClicked', event }))}
+                onContextMenu={semanticHandler({ kind: 'wall', wallIndex: index }, () => props.dispatch({ type: 'deleteRequested', pointId: point.id }))}
               />
             );
           })}
@@ -247,9 +289,11 @@ export function RoomCanvas(props: RoomCanvasProps) {
                   stroke="#334155"
                   strokeWidth={2}
                   hitStrokeWidth={12}
-                  onMouseDown={semanticHandler({ kind: 'point', pointId: point.id }, props.onPointerDown)}
-                  onClick={semanticHandler({ kind: 'point', pointId: point.id }, props.onClick)}
-                  onContextMenu={semanticHandler({ kind: 'point', pointId: point.id }, props.onContextMenu)}
+                  onPointerDown={tool.kind === 'select' && movable
+                    ? dragHandler({ kind: 'point', pointId: point.id })
+                    : undefined}
+                  onClick={semanticHandler({ kind: 'point', pointId: point.id }, (event) => props.dispatch({ type: 'canvasClicked', event }))}
+                  onContextMenu={semanticHandler({ kind: 'point', pointId: point.id }, () => props.dispatch({ type: 'deleteRequested', pointId: point.id }))}
                 />
                 <Text x={canvas.x + 10} y={canvas.y - 22} text={`А${point.id}`} fontSize={13} fontStyle="bold" fill="#0f172a" listening={false} />
               </Fragment>
