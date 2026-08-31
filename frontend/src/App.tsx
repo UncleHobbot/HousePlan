@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Floor, Project, Room } from '@houseplan/shared';
 import {
   allocateId,
+  addFloor as addFloorToProject,
   applySnapshot,
   createSnapshot,
   deleteObject,
@@ -231,19 +232,8 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
   function addFloor() {
     if (!project) return;
     store.update((p) => {
-      const id = allocateId(p, 'floor');
-      p.counters.floor = id;
-      const neighbour = p.floors.find((f) => f.id === activeFloor) ?? p.floors[p.floors.length - 1];
-      p.floors.push({
-        id,
-        name: `${p.floors.length + 1}-й этаж`,
-        ceilingHeightCm: 260,
-        shell: neighbour
-          ? structuredClone(neighbour.shell)
-          : { contour: { points: [], thicknesses: {}, locks: [], closed: false }, openings: [] },
-        rooms: [],
-      });
-      setActiveFloor(id);
+      const floor = addFloorToProject(p, activeFloor ?? undefined);
+      setActiveFloor(floor.id);
     });
   }
 
@@ -255,7 +245,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
       const allocated = allocateId(p, 'room');
       f.rooms.push({
         id: allocated,
-        name: `Комната ${allocated}`,
+        name: `Помещение ${allocated}`,
         contour: { points: [], thicknesses: {}, locks: [], closed: false },
         openings: [],
         zones: [],

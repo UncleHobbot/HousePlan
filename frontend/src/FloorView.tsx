@@ -6,6 +6,7 @@ import {
   bodyPolygon,
   clearancePolygon,
   conflictObjectIds,
+  locateObject,
   openingSegment,
   placeObject,
   roomAt,
@@ -99,35 +100,13 @@ export function FloorView({
   }
 
   function movePlacement(objectId: number, x: number, y: number) {
-    // комната под курсором; если курсор вне комнат — объект остаётся в текущей
-    const roomId = roomAt(activeFloor, x, y) ?? locateRoomId(objectId);
+    // помещение под курсором; если курсор снаружи — объект остаётся в текущем
+    const located = locateObject(project, objectId);
+    const roomId = roomAt(activeFloor, x, y) ?? located?.room.id;
     if (roomId === undefined) return;
-    const rotation = locateRotation(objectId);
+    const rotation = located?.placement.rotationDeg ?? 0;
     const next = placeObject(project, objectId, floorId, { x, y }, roomId, rotation);
     if (next) onChangeFloors(next.floors);
-  }
-
-  function locateRoomId(objectId: number): number | undefined {
-    const located = project.floors
-      .flatMap((floor) => floor.rooms)
-      .find((room) => room.placements.some((placement) => placement.objectId === objectId));
-    return located?.id;
-  }
-
-  function locateRotation(objectId: number): number {
-    const located = locateObjectShared(objectId);
-    return located?.placement.rotationDeg ?? 0;
-  }
-
-  function locateObjectShared(objectId: number) {
-    for (const floor of project.floors) {
-      for (const room of floor.rooms) {
-        for (const placement of room.placements) {
-          if (placement.objectId === objectId) return { floor, room, placement };
-        }
-      }
-    }
-    return null;
   }
 
   function rotateSelected(delta: number) {
@@ -176,14 +155,8 @@ export function FloorView({
               <b className="bad-text"> · допуск пересекает чужое тело или зону</b>
             ) : null}
           </span>
-          <button onClick={() => {
-            const next = rotateObject(project, selected, -15);
-            if (next) onChangeFloors(next.floors);
-          }}>⟲ −15°</button>
-          <button onClick={() => {
-            const next = rotateObject(project, selected, 15);
-            if (next) onChangeFloors(next.floors);
-          }}>⟳ +15°</button>
+          <button onClick={() => rotateSelected(-15)}>⟲ −15°</button>
+          <button onClick={() => rotateSelected(15)}>⟳ +15°</button>
           <button onClick={removeFromPlan}>Убрать на склад</button>
         </div>
       ) : null}

@@ -59,3 +59,28 @@ test('acceptCard выдаёт следующий id и не меняет исх�
   assert.equal(project.objects.length, 0);
   assert.equal(project.counters.object, 1);
 });
+
+test('acceptCard не конфликтует с объектом при устаревшем счётчике', () => {
+  const project = {
+    formatVersion: 1,
+    name: 'Дом',
+    floors: [],
+    objects: [{
+      id: 20,
+      name: 'Существующий стол',
+      category: 'table' as const,
+      widthCm: 120,
+      depthCm: 70,
+      heightCm: 75,
+      clearances: { front: 0, back: 0, left: 0, right: 0 },
+    }],
+    snapshots: [],
+    counters: { object: 1 },
+  };
+
+  const { project: next, object } = acceptCard(project, { name: 'Новый стул' });
+
+  assert.equal(object.id, 21);
+  assert.deepEqual(next.objects.map(({ id }) => id), [20, 21]);
+  assert.equal(project.counters.object, 1, 'исходный проект не меняется');
+});

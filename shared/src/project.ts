@@ -1,7 +1,67 @@
-// Запросы над проектом, которые нужны и интерфейсу, и агентам:
-// сквозные зоны, имена комнат и местоположение объектов.
+// Запросы и операции над проектом, которые нужны интерфейсу и агентам:
+// этажи, сквозные зоны, имена помещений и местоположение объектов.
 
-import type { Project, Zone } from './index.js';
+import type { Floor, Project, Zone } from './index.js';
+import { allocateId, rebaseCounters } from './index.js';
+import { locateObject } from './placements.js';
+
+function copyShellWithNewIds(project: Project, source: Floor['shell']): Floor['shell'] {
+  const pointIds = new Map<number, number>();
+  const points = source.contour.points.map((point) => {
+    const id = allocateId(project, 'point');
+    pointIds.set(point.id, id);
+    return { ...point, id };
+  });
+  const remapPointId = (oldId: number): number => {
+    const id = pointIds.get(oldId);
+    if (id === undefined) throw new Error(`Оболочка ссылается на отсутствующую точку ${oldId}`);
+    return id;
+  };
+  const thicknesses: Record<number, number> = {};
+  for (const point of source.contour.points) {
+    const thickness = source.contour.thicknesses[point.id];
+    if (thickness !== undefined) thicknesses[remapPointId(point.id)] = thickness;
+  }
+  return {
+    contour: {
+      points,
+      thicknesses,
+      locks: source.contour.locks.map((lock) => ({
+        ...lock,
+        aId: remapPointId(lock.aId),
+        bId: remapPointId(lock.bId),
+      })),
+      closed: source.contour.closed,
+    },
+    openings: source.openings.map((opening) => ({
+      ...structuredClone(opening),
+      id: allocateId(project, 'opening'),
+      wallPointId: remapPointId(opening.wallPointId),
+    })),
+  };
+}
+
+/**
+ * Добавить независимый этаж, взяв оболочку указанного соседнего этажа за
+ * отправную точку. Идентификаторы оболочки выдаются заново, поэтому дальнейшие
+ * изменения этажей не затрагивают друг друга (ADR 0002).
+ */
+export function addFloor(project: Project, neighbourFloorId?: number): Floor {
+  rebaseCounters(project);
+  const neighbour = project.floors.find((floor) => floor.id === neighbourFloorId)
+    ?? project.floors.at(-1);
+  const floor: Floor = {
+    id: allocateId(project, 'floor'),
+    name: `${project.floors.length + 1}-й этаж`,
+    ceilingHeightCm: 260,
+    shell: neighbour
+      ? copyShellWithNewIds(project, neighbour.shell)
+      : { contour: { points: [], thicknesses: {}, locks: [], closed: false }, openings: [] },
+    rooms: [],
+  };
+  project.floors.push(floor);
+  return floor;
+}
 
 /**
  * Сквозные зоны, видимые на этаже floorId проекцией: зона хранится на своём
@@ -30,7 +90,7 @@ export function projectedZonesForFloor(project: Project, floorId: number): Zone[
   return result;
 }
 
-/** «Этаж: комната» — человекочитаемое имя помещения. */
+/** «Этаж: помещение» — человекочитаемое имя помещения. */
 export function roomLabel(project: Project, roomId: number): string {
   for (const floor of project.floors) {
     const room = floor.rooms.find((r) => r.id === roomId);
@@ -39,14 +99,8 @@ export function roomLabel(project: Project, roomId: number): string {
   return '?';
 }
 
-/** Где объект: имя комнаты или «на складе». */
+/** Где объект: имя помещения или «на складе». */
 export function objectLocation(project: Project, objectId: number): string {
-  for (const floor of project.floors) {
-    for (const room of floor.rooms) {
-      if (room.placements.some((p) => p.objectId === objectId)) {
-        return `${floor.name}: ${room.name}`;
-      }
-    }
-  }
-  return 'на складе';
+  const located = locateObject(project, objectId);
+  return located ? `${located.floor.name}: ${located.room.name}` : 'на складе';
 }

@@ -2,7 +2,7 @@
 // Формат карточки — часть контракта папки _import/ (ADR 0005, задачи #17/#18).
 
 import type { AssistantCard, ObjectCategory, Project, SceneObject } from './index.js';
-import { allocateId } from './index.js';
+import { allocateId, rebaseCounters } from './index.js';
 
 const CATEGORIES: ObjectCategory[] = [
   'sofa', 'armchair', 'table', 'chair', 'bed', 'wardrobe', 'light', 'appliance', 'other',
@@ -53,6 +53,7 @@ export function acceptCard(
   card: AssistantCard,
 ): { project: Project; object: SceneObject } {
   const next = structuredClone(project);
+  rebaseCounters(next);
   const id = allocateId(next, 'object');
   const object: SceneObject = { ...cardToSceneObject(card), id };
   next.objects.push(object);

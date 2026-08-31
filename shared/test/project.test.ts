@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Project, SceneObject, Zone } from '../src/index.js';
-import { objectLocation, projectedZonesForFloor, roomLabel } from '../src/project.js';
+import { addFloor, objectLocation, projectedZonesForFloor, roomLabel } from '../src/project.js';
 
 const stairs = (id: number, fromFloorId: number, toFloorId: number): Zone => ({
   id,
@@ -77,13 +77,64 @@ test('диапазон «от-до» работает в обе стороны �
   assert.equal(projectedZonesForFloor(p, 3).some((z) => z.id === 2), true);
 });
 
-test('roomLabel: «Этаж: комната», неизвестный id — «?»', () => {
+test('roomLabel: «Этаж: помещение», неизвестный id — «?»', () => {
   assert.equal(roomLabel(project(), 20), '1-й этаж: Салон');
   assert.equal(roomLabel(project(), 999), '?');
 });
 
-test('objectLocation: расставленный объект — имя комнаты, остальных — склад', () => {
+test('objectLocation: расставленный объект — имя помещения, остальные — на складе', () => {
   const p = project();
   assert.equal(objectLocation(p, 1), '1-й этаж: Салон');
   assert.equal(objectLocation(p, 999), 'на складе');
+});
+
+test('addFloor копирует оболочку соседнего этажа с независимыми идентификаторами', () => {
+  const p = project();
+  const source = p.floors[1];
+  source.shell = {
+    contour: {
+      points: [
+        { id: 101, x: 0, y: 0 },
+        { id: 102, x: 500, y: 0 },
+        { id: 103, x: 500, y: 400 },
+      ],
+      thicknesses: { 101: 15, 102: 20, 103: 25 },
+      locks: [{ aId: 101, bId: 103, length: 900 }],
+      closed: true,
+    },
+    openings: [{
+      id: 50,
+      kind: 'window',
+      wallPointId: 102,
+      offsetCm: 100,
+      widthCm: 120,
+      attributes: [],
+    }],
+  };
+  p.counters = { floor: 0, point: 0, opening: 0 };
+
+  const added = addFloor(p, source.id);
+
+  assert.equal(p.floors.at(-1), added);
+  assert.equal(added.name, '4-й этаж');
+  assert.deepEqual(
+    added.shell.contour.points.map(({ x, y }) => ({ x, y })),
+    source.shell.contour.points.map(({ x, y }) => ({ x, y })),
+  );
+  const sourcePointIds = new Set(source.shell.contour.points.map(({ id }) => id));
+  assert.ok(added.shell.contour.points.every(({ id }) => !sourcePointIds.has(id)));
+  assert.notEqual(added.shell.openings[0].id, source.shell.openings[0].id);
+
+  const copiedPointIds = added.shell.contour.points.map(({ id }) => id);
+  assert.deepEqual(Object.keys(added.shell.contour.thicknesses).map(Number), copiedPointIds);
+  assert.deepEqual(
+    added.shell.contour.locks[0],
+    { aId: copiedPointIds[0], bId: copiedPointIds[2], length: 900 },
+  );
+  assert.equal(added.shell.openings[0].wallPointId, copiedPointIds[1]);
+
+  added.shell.contour.points[0].x = 999;
+  added.shell.openings[0].attributes.push({ name: 'Штора', value: 'Да' });
+  assert.equal(source.shell.contour.points[0].x, 0, 'геометрия этажей не связана');
+  assert.deepEqual(source.shell.openings[0].attributes, [], 'проёмы этажей не связаны');
 });

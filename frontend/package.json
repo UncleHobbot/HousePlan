@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "pretest": "npm run build -w @houseplan/shared",
     "test": "node --import tsx --test"
   },
   "dependencies": {

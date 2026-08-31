@@ -62,7 +62,7 @@ export function makeOpening(
   const wall = wallByPoint(contour.points, wallPointId);
   if (!wall) return null;
   const defaults = OPENING_DEFAULTS[kind];
-  const length = Math.abs(wall.b.x - wall.a.x) + Math.abs(wall.b.y - wall.a.y);
+  const length = Math.hypot(wall.b.x - wall.a.x, wall.b.y - wall.a.y);
   const along = Math.round(alongCm - defaults.width / 2);
   const offset = Math.max(0, Math.min(along, Math.max(0, length - defaults.width)));
   return {

@@ -3,7 +3,7 @@
 // (FloorView) — чтобы один домен не рисовался двумя разными способами.
 
 import type { Contour, OpeningKind, Point, ZoneKind } from '@houseplan/shared';
-import { ZONE_KIND_LABELS } from '@houseplan/shared';
+import { pointAverage, ZONE_KIND_LABELS } from '@houseplan/shared';
 
 export const ZONE_COLORS: Record<ZoneKind, string> = {
   stairs: '#7c3aed',
@@ -42,12 +42,9 @@ export function withAlpha(color: string, alpha: number): string {
   return `rgba(${Number.parseInt(red, 16)}, ${Number.parseInt(green, 16)}, ${Number.parseInt(blue, 16)}, ${alpha})`;
 }
 
-/** Центр описанного прямоугольника контура. */
+/** Среднее координат вершин контура. */
 export function contourCentroid(points: Point[]): { x: number; y: number } {
-  return {
-    x: points.reduce((sum, point) => sum + point.x, 0) / Math.max(1, points.length),
-    y: points.reduce((sum, point) => sum + point.y, 0) / Math.max(1, points.length),
-  };
+  return pointAverage(points);
 }
 
 /**
@@ -59,6 +56,11 @@ export function wallThicknessBands(contour: Contour): Array<Array<{ x: number; y
   const points = contour.points;
   const n = points.length;
   if (!contour.closed || n < 3) return [];
+  const signedDoubleArea = points.reduce((area, point, index) => {
+    const next = points[(index + 1) % n];
+    return area + point.x * next.y - next.x * point.y;
+  }, 0);
+  const outwardNormalSign = signedDoubleArea >= 0 ? 1 : -1;
   const bands: Array<Array<{ x: number; y: number }>> = [];
   for (let i = 0; i < n; i++) {
     const a = points[i];
@@ -68,8 +70,8 @@ export function wallThicknessBands(contour: Contour): Array<Array<{ x: number; y
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const length = Math.hypot(dx, dy) || 1;
-    const nx = (dy / length) * thickness;
-    const ny = (-dx / length) * thickness;
+    const nx = (dy / length) * thickness * outwardNormalSign;
+    const ny = (-dx / length) * thickness * outwardNormalSign;
     bands.push([
       { x: a.x, y: a.y },
       { x: b.x, y: b.y },

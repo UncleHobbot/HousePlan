@@ -27,6 +27,28 @@ test('полоса толщины рисуется наружу от линии 
   assert.deepEqual([c, d], [{ x: 600, y: -30 }, { x: 0, y: -30 }]);
 });
 
+test('полосы толщины идут наружу при обоих направлениях обхода контура', () => {
+  const forward = rect();
+  const reverse: Contour = {
+    ...forward,
+    points: [...forward.points].reverse(),
+    thicknesses: { 2: 30 },
+  };
+
+  assert.deepEqual(wallThicknessBands(forward)[0], [
+    { x: 0, y: 0 },
+    { x: 600, y: 0 },
+    { x: 600, y: -30 },
+    { x: 0, y: -30 },
+  ]);
+  assert.deepEqual(wallThicknessBands(reverse)[0], [
+    { x: 600, y: 0 },
+    { x: 0, y: 0 },
+    { x: 0, y: -30 },
+    { x: 600, y: -30 },
+  ]);
+});
+
 test('стены без толщины полос не дают', () => {
   const c = rect();
   c.thicknesses = {};
@@ -52,7 +74,7 @@ test('withAlpha превращает hex в rgba', () => {
   assert.equal(withAlpha('не-цвет', 0.3), 'не-цвет');
 });
 
-test('contourCentroid — центр описанного прямоугольника', () => {
+test('contourCentroid — среднее координат вершин', () => {
   const center = contourCentroid(rect().points);
   assert.deepEqual(center, { x: 300, y: 200 });
 });

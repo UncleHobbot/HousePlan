@@ -3,6 +3,7 @@
 // Все операции возвращают новый проект и сами снимают прежнее размещение.
 
 import type { Cm, Floor, Placement, Project, Room } from './index.js';
+import { pointAverage } from './geometry.js';
 import { pointInPolygon } from './objects.js';
 
 export interface LocatedObject {
@@ -31,24 +32,25 @@ function bboxArea(room: Room): number {
   return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
 }
 
-/** Самая большая замкнутая комната этажа. */
+/** Самое большое замкнутое помещение этажа. */
 export function largestRoom(floor: Floor): Room | null {
   const closed = floor.rooms.filter((room) => room.contour.closed);
   if (closed.length === 0) return null;
   return closed.reduce((biggest, room) => (bboxArea(room) > bboxArea(biggest) ? room : biggest));
 }
 
-/** Центр описанного прямоугольника комнаты — точка по умолчанию для «На план». */
+/** Среднее координат вершин помещения — точка по умолчанию для «На план». */
 export function roomCentroid(room: Room): { x: Cm; y: Cm } {
-  const x = Math.round(room.contour.points.reduce((sum, p) => sum + p.x, 0) / room.contour.points.length);
-  const y = Math.round(room.contour.points.reduce((sum, p) => sum + p.y, 0) / room.contour.points.length);
+  const center = pointAverage(room.contour.points);
+  const x = Math.round(center.x);
+  const y = Math.round(center.y);
   return { x, y };
 }
 
 /**
  * Поставить объект на план. Прежнее размещение исчезает — даже на другом
- * этаже (объект не дублируется). Без roomId комната — самая большая
- * замкнутая на этаже. Возвращает null, если на этаже нет комнаты.
+ * этаже (объект не дублируется). Без roomId выбирается самое большое
+ * замкнутое помещение. Возвращает null, если на этаже нет помещений.
  */
 export function placeObject(
   project: Project,
@@ -127,7 +129,7 @@ export function rotateObject(project: Project, objectId: number, deltaDeg: numbe
   };
 }
 
-/** Комната, содержащая точку (закрытые контуры). */
+/** Помещение, содержащее точку (среди замкнутых контуров). */
 export function roomAtPoint(floor: Floor, x: Cm, y: Cm): Room | null {
   for (const room of floor.rooms) {
     if (room.contour.closed && pointInPolygon({ x, y }, room.contour.points)) return room;

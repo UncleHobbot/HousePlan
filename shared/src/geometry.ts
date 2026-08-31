@@ -8,6 +8,14 @@ import type { Cm, Contour, Point, SizeLock } from './index.js';
 
 const MIN = 10; // минимальная длина стены, см
 
+/** Среднее координат набора точек; для пустого набора — начало координат. */
+export function pointAverage(points: Point[]): { x: number; y: number } {
+  return {
+    x: points.reduce((sum, point) => sum + point.x, 0) / Math.max(1, points.length),
+    y: points.reduce((sum, point) => sum + point.y, 0) / Math.max(1, points.length),
+  };
+}
+
 type Axis = 'H' | 'V' | 'D';
 
 function idxOf(points: Point[], id: number): number {

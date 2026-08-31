@@ -257,6 +257,10 @@ export function rebaseCounters(project: Project): void {
     }
   }
   ids.object.push(...project.objects.map((object) => object.id));
+  for (const snapshot of project.snapshots) {
+    ids.object.push(...snapshot.placements.map((placement) => placement.object.id));
+    ids.object.push(...snapshot.storeroomObjects.map((object) => object.id));
+  }
   ids.snapshot.push(...project.snapshots.map((snapshot) => snapshot.id));
   for (const kind of Object.keys(ids) as IdKind[]) {
     project.counters[kind] = Math.max(project.counters[kind] ?? 0, 0, ...ids[kind]);

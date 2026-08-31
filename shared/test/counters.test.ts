@@ -61,11 +61,38 @@ test('rebaseCounters не понижает счётчики', () => {
 
 test('allocateId после rebase не конфликтует со слепками снэпшота', () => {
   const p = project();
-  // в снэпшоте лежит копия объекта с id 7 — в живом плане его нет
+  // В снэпшоте лежат копии объектов, которых в живом плане уже нет.
+  p.snapshots.push({
+    id: 1,
+    name: 'До перестановки',
+    placements: [{
+      object: {
+        id: 7,
+        name: 'Стол',
+        category: 'table',
+        widthCm: 120,
+        depthCm: 70,
+        heightCm: 75,
+        clearances: { front: 0, back: 0, left: 0, right: 0 },
+      },
+      roomId: 10,
+      x: 10,
+      y: 20,
+      rotationDeg: 0,
+    }],
+    storeroomObjects: [{
+      id: 8,
+      name: 'Стул',
+      category: 'chair',
+      widthCm: 45,
+      depthCm: 45,
+      heightCm: 90,
+      clearances: { front: 0, back: 0, left: 0, right: 0 },
+    }],
+  });
   p.counters.object = 3;
   p.counters.snapshot = 1;
   rebaseCounters(p);
   const id = allocateId(p, 'object');
-  assert.ok(id !== 7 || true); // слепки хранят свои id, конфликт проверяется на слепках
-  assert.ok(id >= 1);
+  assert.ok(id > 8, 'новый id выше объектов из расстановки и склада снэпшота');
 });

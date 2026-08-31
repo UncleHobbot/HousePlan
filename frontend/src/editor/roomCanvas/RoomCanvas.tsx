@@ -168,22 +168,13 @@ export function RoomCanvas(props: RoomCanvasProps) {
             </>
           )}
 
-          {contour.closed && points.map((point, index) => {
-            const next = points[(index + 1) % points.length];
-            const thickness = contour.thicknesses[point.id] ?? 0;
-            if (!thickness) return null;
-            const dx = next.x - point.x;
-            const dy = next.y - point.y;
-            const length = Math.hypot(dx, dy) || 1;
-            const offset = { x: (dy / length) * thickness, y: (-dx / length) * thickness };
-            return (
-              <Line
-                key={`thickness-${point.id}`}
-                points={viewport.flatten([point, next, { x: next.x + offset.x, y: next.y + offset.y }, { x: point.x + offset.x, y: point.y + offset.y }])}
-                closed fill="#94a3b8" opacity={0.34} listening={false}
-              />
-            );
-          })}
+          {wallThicknessBands(contour).map((band, index) => (
+            <Line
+              key={`thickness-${index}`}
+              points={viewport.flatten(band)}
+              closed fill="#94a3b8" opacity={0.34} listening={false}
+            />
+          ))}
 
           {points.map((point, index) => {
             if (!contour.closed && index === points.length - 1) return null;

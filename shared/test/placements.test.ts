@@ -77,19 +77,19 @@ test('placeObject: одно размещение, прежнее исчезае�
   assert.equal(places[0].floorId, 2);
 });
 
-test('placeObject без комнаты выбирает самую большую', () => {
+test('placeObject без помещения выбирает самое большое', () => {
   const p = project();
   const placed = placeObject(p, 1, 1, { x: 100, y: 100 })!;
   assert.equal(placed.floors[0].rooms[0].id, 1, 'Салон 600 шире Спальни 500');
 });
 
-test('placeObject возвращает null без комнат на этаже', () => {
+test('placeObject возвращает null, если на этаже нет помещений', () => {
   const p = project();
   p.floors[0].rooms = [];
   assert.equal(placeObject(p, 1, 1, { x: 100, y: 100 }), null);
 });
 
-test('locateObject находит этаж и комнату; на складе — null', () => {
+test('locateObject находит этаж и помещение; на складе — null', () => {
   let p = placeObject(project(), 1, 1, { x: 100, y: 100 }, 1)!;
   const located = locateObject(p, 1);
   assert.equal(located?.floor.id, 1);

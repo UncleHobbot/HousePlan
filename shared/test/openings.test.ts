@@ -121,3 +121,20 @@ test('makeOpening: не вылезает за край стены', () => {
   assert.ok(opening);
   assert.equal(opening.offsetCm, 480, '600 − 120 = максимум');
 });
+
+test('makeOpening: проём не вылезает за край диагональной стены', () => {
+  const diagonal: Contour = {
+    points: [
+      { id: 1, x: 0, y: 0 },
+      { id: 2, x: 300, y: 400 },
+      { id: 3, x: 0, y: 400 },
+    ],
+    thicknesses: {}, locks: [], closed: true,
+  };
+
+  const opening = makeOpening(diagonal, 'window', 1, 490, 12);
+
+  assert.ok(opening);
+  assert.equal(opening.offsetCm, 380, 'длина стены 500 см, максимум 500 − 120');
+  assert.equal(opening.offsetCm + opening.widthCm, 500);
+});
