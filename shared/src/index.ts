@@ -2,6 +2,7 @@
 // Все длины — целые сантиметры. Осей стен нет: линии контуров — внутренние грани.
 
 export * from './geometry.js';
+export * from './import.js';
 export * from './objects.js';
 export * from './openings.js';
 export * from './placements.js';

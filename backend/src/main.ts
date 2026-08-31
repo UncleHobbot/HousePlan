@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { allocateId, FORMAT_VERSION, Project, type AssistantCard, type ObjectCategory, type SceneObject } from '@houseplan/shared';
+import { acceptCard, FORMAT_VERSION, Project, type AssistantCard, type ProjectCounters } from '@houseplan/shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -195,47 +195,12 @@ app.post('/api/projects/:name/rename', asyncHandler(async (req, res) => {
 
 // ---------- импорт карточек от ассистента (папка _import/) ----------
 
-const CATEGORIES: ObjectCategory[] = [
-  'sofa', 'armchair', 'table', 'chair', 'bed', 'wardrobe', 'light', 'appliance', 'other',
-];
+
 
 function isSafeFileName(file: string): boolean {
   return file.endsWith('.json') && !file.includes('/') && !file.includes('\\') && !file.includes('..');
 }
 
-function cardToSceneObject(card: AssistantCard): Omit<SceneObject, 'id'> {
-  const number = (value: unknown, fallback: number): number => {
-    const parsed = Math.round(Number(value));
-    return Number.isFinite(parsed) ? parsed : fallback;
-  };
-  const category: ObjectCategory = (CATEGORIES as string[]).includes(card.category ?? '')
-    ? (card.category as ObjectCategory)
-    : 'other';
-  return {
-    name: typeof card.name === 'string' && card.name.trim() ? card.name.trim() : 'Объект из импорта',
-    category,
-    widthCm: number(card.size?.w, 100),
-    depthCm: number(card.size?.d, 50),
-    heightCm: number(card.size?.h, 75),
-    color: typeof card.color === 'string' ? card.color : undefined,
-    images: Array.isArray(card.images) ? card.images.map(String) : [],
-    clearances: {
-      front: number(card.clearance?.front, 0),
-      back: number(card.clearance?.back, 0),
-      left: 0,
-      right: 0,
-    },
-    source: card.source
-      ? {
-          vendor: String(card.source.vendor ?? ''),
-          url: String(card.source.url ?? ''),
-          priceCad: number(card.source.price_cad, 0) || undefined,
-          confidence: card.source.confidence === 'estimated' ? 'estimated' : 'retailer',
-        }
-      : undefined,
-    unconfirmedImport: true,
-  };
-}
 
 app.get('/api/import', asyncHandler(async (_req, res) => {
   await ensureDataDirs();
@@ -260,12 +225,10 @@ app.post('/api/import/accept', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'недопустимое имя файла' });
     return;
   }
-  const project = await readProject(projectName);
   const card = JSON.parse(await fs.readFile(path.join(IMPORT_DIR, file), 'utf8')) as AssistantCard;
-  const object = cardToSceneObject(card);
-  const id = allocateId(project, 'object');
-  const created: SceneObject = { ...object, id };
-  project.objects.push(created);
+  const original = await readProject(projectName);
+  const { project: updated, object: created } = acceptCard(original, card);
+  const project = updated;
   // картинки из папки импорта переезжают в папку картинок проекта
   if ((created.images ?? []).length > 0) {
     const imagesDir = path.join(projectDir(project.name), 'картинки');

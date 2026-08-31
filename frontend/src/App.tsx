@@ -347,12 +347,9 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
   async function acceptImport(file: string) {
     try {
       const result = await api.acceptImport(file, name);
-      // состояние менял сервер — локальная история отмены сбрасывается
-      historyRef.current = [];
-      redoRef.current = [];
-      setCanUndo(false);
-      setCanRedo(false);
+      // сервер сохранил файл — клиент ставит ту же версию в историю отмены
       rebaseCounters(result.project);
+      pushHistory();
       setProject(result.project);
       setDirty(false);
       setImportCards(await api.listImport());
