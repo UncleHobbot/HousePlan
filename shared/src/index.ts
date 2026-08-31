@@ -6,6 +6,7 @@ export * from './import.js';
 export * from './objects.js';
 export * from './openings.js';
 export * from './placements.js';
+export * from './project.js';
 export * from './snapshots.js';
 export * from './zones.js';
 

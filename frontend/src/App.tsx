@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import type { AssistantCard, Floor, Project, Room } from '@houseplan/shared';
+import { useEffect, useState } from 'react';
+import type { Floor, Project, Room } from '@houseplan/shared';
 import {
   allocateId,
   applySnapshot,
@@ -9,14 +9,17 @@ import {
   largestRoom,
   locateObject,
   livePlacements,
+  objectLocation,
   placeObject,
-  rebaseCounters,
+  projectedZonesForFloor,
   roomCentroid,
+  roomLabel,
 } from '@houseplan/shared';
 import { api, type ImportCard, type ProjectSummary } from './api';
 import { FloorView } from './FloorView';
 import { RoomEditor } from './editor/RoomEditor';
 import { StockPanel } from './StockPanel';
+import { useProjectStore } from './useProjectStore';
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
@@ -97,108 +100,140 @@ export function App() {
 }
 
 function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => void; onRenamed: (newName: string) => void }) {
-  const [project, setProject] = useState<Project | null>(null);
-  const [error, setError] = useState('');
+  const store = useProjectStore(name);
+  const { project, error, notice, dirty, canUndo, canRedo } = store;
   const [activeFloor, setActiveFloor] = useState<number | null>(null);
-  const [dirty, setDirty] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
   const [editingShell, setEditingShell] = useState(false);
   const [snapName, setSnapName] = useState('');
   const [snapNote, setSnapNote] = useState('');
   const [compareWith, setCompareWith] = useState<number | null>(null);
   const [importCards, setImportCards] = useState<ImportCard[] | null>(null);
-  const [notice, setNotice] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
-  const historyRef = useRef<Project[]>([]);
-  const redoRef = useRef<Project[]>([]);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
 
-  function say(text: string) {
-    setNotice(text);
-  }
-
+  // активный этаж: при загрузке и после исчезновения выбранного
   useEffect(() => {
-    api
-      .readProject(name)
-      .then((p) => {
-        rebaseCounters(p);
-        setProject(p);
-        setActiveFloor(p.floors[0]?.id ?? null);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [name]);
-
-  function pushHistory() {
     if (!project) return;
-    historyRef.current.push(project);
-    if (historyRef.current.length > 50) historyRef.current.shift();
-    redoRef.current = [];
-    setCanUndo(true);
-    setCanRedo(false);
-  }
-
-  function update(change: (p: Project) => void) {
-    pushHistory();
-    setDirty(true);
-    setProject((current) => {
-      if (!current) return current;
-      const copy = structuredClone(current);
-      change(copy);
-      rebaseCounters(copy);
-      return copy;
-    });
-  }
-
-  function undo() {
-    const previous = historyRef.current.pop();
-    if (!previous || !project) return;
-    redoRef.current.push(project);
-    rebaseCounters(previous);
-    setProject(previous);
-    setDirty(true);
-    setCanUndo(historyRef.current.length > 0);
-    setCanRedo(true);
-    say('Действие отменено.');
-  }
-
-  function redo() {
-    const next = redoRef.current.pop();
-    if (!next || !project) return;
-    historyRef.current.push(project);
-    rebaseCounters(next);
-    setProject(next);
-    setDirty(true);
-    setCanUndo(true);
-    setCanRedo(redoRef.current.length > 0);
-    say('Действие возвращено.');
-  }
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      const key = event.key.toLowerCase();
-      if (key === 'z' && !event.shiftKey) {
-        event.preventDefault();
-        undo();
-      } else if ((key === 'z' && event.shiftKey) || key === 'y') {
-        event.preventDefault();
-        redo();
-      }
+    if (!project.floors.some((f) => f.id === activeFloor)) {
+      setActiveFloor(project.floors[0]?.id ?? null);
     }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
+  }, [project, activeFloor]);
 
+  async function checkImport() {
+    try {
+      setImportCards(await api.listImport());
+    } catch (e) {
+      store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
+  async function acceptImport(file: string) {
+    try {
+      const result = await api.acceptImport(file, name);
+      // сервер уже сохранил проект; состояние участвует в отмене
+      store.install(result.project, { history: true, dirty: false });
+      setImportCards(await api.listImport());
+      store.say(`Объект «${result.object.name}» принят на склад с пометкой «не подтверждено».`);
+    } catch (e) {
+      store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function rejectImport(file: string) {
+    try {
+      await api.rejectImport(file);
+      setImportCards(await api.listImport());
+    } catch (e) {
+      store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function renameProject() {
+    const newName = newProjectName.trim();
+    if (!newName || newName === name) {
+      setRenaming(false);
+      return;
+    }
+    try {
+      const result = await api.renameProject(name, newName);
+      store.install(result.project, { history: false, dirty: false });
+      setRenaming(false);
+      onRenamed(newName);
+      store.say(`Проект переименован в «${newName}».`);
+    } catch (e) {
+      store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function rememberSnapshot() {
+    if (!project) return;
+    const variantName = snapName.trim() || `Вариант ${(project.counters.snapshot ?? 0) + 1}`;
+    store.update((p) => {
+      const id = allocateId(p, 'snapshot');
+      const snapshot = createSnapshot(p, id, variantName, snapNote.trim() || undefined);
+      p.counters.snapshot = id;
+      p.snapshots.push(snapshot);
+    });
+    setSnapName('');
+    setSnapNote('');
+    store.say(`Вариант «${variantName}» запомнен. Не забудьте сохранить изменения.`);
+  }
+
+  function restoreSnapshot(snapshotId: number) {
+    if (!project) return;
+    const snapshot = project.snapshots.find((s) => s.id === snapshotId);
+    if (!snapshot) return;
+    if (!window.confirm(`Вернуть вариант «${snapshot.name}»? Текущая расстановка будет перезаписана.`)) return;
+    store.install(applySnapshot(project, snapshot), { dirty: true });
+    setCompareWith(null);
+    store.say(`Вариант «${snapshot.name}» возвращён в живой план.`);
+  }
+
+  function deleteSnapshot(snapshotId: number) {
+    if (!project) return;
+    store.update((p) => {
+      p.snapshots = p.snapshots.filter((s) => s.id !== snapshotId);
+    });
+    if (compareWith === snapshotId) setCompareWith(null);
+  }
+
+  function deleteFloor() {
+    if (!project || !floor) return;
+    const placed = floor.rooms.reduce((sum, r) => sum + r.placements.length, 0);
+    const message =
+      `Удалить этаж «${floor.name}»? Помещений: ${floor.rooms.length}.` +
+      (placed > 0 ? ` Объектов на этаже: ${placed} — они вернутся на склад.` : '');
+    if (!window.confirm(message)) return;
+    store.update((p) => {
+      p.floors = p.floors.filter((f) => f.id !== floor.id);
+    });
+    const remaining = project.floors.find((f) => f.id !== floor.id);
+    setActiveFloor(remaining ? remaining.id : null);
+    store.say(`Этаж «${floor.name}» удалён.`);
+  }
+
+  function deleteRoom(room: Room) {
+    if (!project || !floor) return;
+    const placed = room.placements.length;
+    const message =
+      `Удалить помещение «${room.name}»? Зоны и двери помещения удалятся.` +
+      (placed > 0 ? ` Объектов в нём: ${placed} — они вернутся на склад.` : '');
+    if (!window.confirm(message)) return;
+    store.update((p) => {
+      const f = p.floors.find((f) => f.id === floor.id);
+      if (f) f.rooms = f.rooms.filter((r) => r.id !== room.id);
+    });
+    if (editingRoomId === room.id) setEditingRoomId(null);
+    store.say(`Помещение «${room.name}» удалено.`);
+  }
 
   function addFloor() {
     if (!project) return;
-    update((p) => {
+    store.update((p) => {
       const id = allocateId(p, 'floor');
       p.counters.floor = id;
-      const neighbour = p.floors.find((floor) => floor.id === activeFloor) ?? p.floors[p.floors.length - 1];
+      const neighbour = p.floors.find((f) => f.id === activeFloor) ?? p.floors[p.floors.length - 1];
       p.floors.push({
         id,
         name: `${p.floors.length + 1}-й этаж`,
@@ -212,14 +247,12 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     });
   }
 
-  function startDrawingRoom(floor: Floor) {
+  function startDrawingRoom(target: Floor) {
     if (!project) return;
-    // предсказываем идентификатор из текущих счётчиков — update() выделит ровно его
     const id = (project.counters.room ?? 0) + 1;
-    update((p) => {
-      const f = p.floors.find((f) => f.id === floor.id)!;
+    store.update((p) => {
+      const f = p.floors.find((f) => f.id === target.id)!;
       const allocated = allocateId(p, 'room');
-      p.counters.room = allocated;
       f.rooms.push({
         id: allocated,
         name: `Комната ${allocated}`,
@@ -232,146 +265,10 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     });
   }
 
-  async function save() {
-    if (!project) return;
-    try {
-      await api.saveProject(name, project);
-      setDirty(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  function rememberSnapshot() {
-    if (!project) return;
-    const name = snapName.trim() || `Вариант ${(project.counters.snapshot ?? 0) + 1}`;
-    const id = (project.counters.snapshot ?? 0) + 1;
-    update((p) => {
-      const snapshot = createSnapshot(p, id, name, snapNote.trim() || undefined);
-      p.counters.snapshot = id;
-      p.snapshots.push(snapshot);
-    });
-    setSnapName('');
-    setSnapNote('');
-    say(`Вариант «${name}» запомнен. Не забудьте сохранить изменения.`);
-  }
-
-  function restoreSnapshot(snapshotId: number) {
-    if (!project) return;
-    const snapshot = project.snapshots.find((s) => s.id === snapshotId);
-    if (!snapshot) return;
-    if (!window.confirm(`Вернуть вариант «${snapshot.name}»? Текущая расстановка будет перезаписана.`)) return;
-    pushHistory();
-    const restored = applySnapshot(project, snapshot);
-    rebaseCounters(restored);
-    setProject(restored);
-    setDirty(true);
-    setActiveFloor((current) => (restored.floors.some((f) => f.id === current) ? current : restored.floors[0]?.id ?? null));
-    setCompareWith(null);
-    say(`Вариант «${snapshot.name}» возвращён в живой план.`);
-  }
-
-  function deleteSnapshot(snapshotId: number) {
-    if (!project) return;
-    update((p) => {
-      p.snapshots = p.snapshots.filter((s) => s.id !== snapshotId);
-    });
-    if (compareWith === snapshotId) setCompareWith(null);
-  }
-
-  function deleteFloor() {
-    if (!project || !floor) return;
-    const placed = floor.rooms.reduce((sum, r) => sum + r.placements.length, 0);
-    const message =
-      `Удалить этаж «${floor.name}»? Помещений: ${floor.rooms.length}.` +
-      (placed > 0 ? ` Объектов на этаже: ${placed} — они вернутся на склад.` : '');
-    if (!window.confirm(message)) return;
-    update((p) => {
-      p.floors = p.floors.filter((f) => f.id !== floor.id);
-    });
-    const remaining = project.floors.find((f) => f.id !== floor.id);
-    setActiveFloor(remaining ? remaining.id : null);
-    say(`Этаж «${floor.name}» удалён.`);
-  }
-
-  function deleteRoom(room: Room) {
-    if (!project || !floor) return;
-    const placed = room.placements.length;
-    const message =
-      `Удалить помещение «${room.name}»? Зоны и двери помещения удалятся.` +
-      (placed > 0 ? ` Объектов в нём: ${placed} — они вернутся на склад.` : '');
-    if (!window.confirm(message)) return;
-    update((p) => {
-      const f = p.floors.find((f) => f.id === floor.id);
-      if (f) f.rooms = f.rooms.filter((r) => r.id !== room.id);
-    });
-    if (editingRoomId === room.id) setEditingRoomId(null);
-    say(`Помещение «${room.name}» удалено.`);
-  }
-
-  async function renameProject() {
-    const newName = newProjectName.trim();
-    if (!newName || newName === name) {
-      setRenaming(false);
-      return;
-    }
-    try {
-      const result = await api.renameProject(name, newName);
-      rebaseCounters(result.project);
-      setProject(result.project);
-      setDirty(false);
-      setRenaming(false);
-      onRenamed(newName);
-      say(`Проект переименован в «${newName}».`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  function roomNameById(roomId: number): string {
-    for (const f of project?.floors ?? []) {
-      const room = f.rooms.find((r) => r.id === roomId);
-      if (room) return `${f.name}: ${room.name}`;
-    }
-    return '?';
-  }
-
-  async function checkImport() {
-    try {
-      setImportCards(await api.listImport());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async function acceptImport(file: string) {
-    try {
-      const result = await api.acceptImport(file, name);
-      // сервер сохранил файл — клиент ставит ту же версию в историю отмены
-      rebaseCounters(result.project);
-      pushHistory();
-      setProject(result.project);
-      setDirty(false);
-      setImportCards(await api.listImport());
-      say(`Объект «${result.object.name}» принят на склад с пометкой «не подтверждено».`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async function rejectImport(file: string) {
-    try {
-      await api.rejectImport(file);
-      setImportCards(await api.listImport());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  if (error && !project) {
+  if (store.error && !project) {
     return (
       <div className="page">
-        <p className="error">{error}</p>
+        <p className="error">{store.error}</p>
         <button onClick={onExit}>К каталогу</button>
       </div>
     );
@@ -379,7 +276,6 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
   if (!project) return <p className="page">Загрузка…</p>;
 
   const floor = project.floors.find((f) => f.id === activeFloor) ?? null;
-  const activeFloorIndex = floor ? project.floors.findIndex((f) => f.id === floor.id) : -1;
   const highlightIds = (() => {
     if (compareWith === null) return undefined;
     const snapshot = project.snapshots.find((s) => s.id === compareWith);
@@ -387,21 +283,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     const diff = diffPlacements(snapshot.placements, livePlacements(project));
     return new Set([...diff.moved.map((m) => m.object.id), ...diff.added.map((p) => p.object.id)]);
   })();
-  const projectedZones = floor
-    ? project.floors.flatMap((sourceFloor, sourceIndex) =>
-        sourceFloor.id === floor.id
-          ? []
-          : sourceFloor.rooms.flatMap((room) =>
-              room.zones.filter((zone) => {
-                if (!zone.spansFloors) return false;
-                const from = project.floors.findIndex((f) => f.id === zone.spansFloors!.fromFloorId);
-                const to = project.floors.findIndex((f) => f.id === zone.spansFloors!.toFloorId);
-                if (from < 0 || to < 0) return false;
-                return activeFloorIndex >= Math.min(from, to) && activeFloorIndex <= Math.max(from, to) && sourceIndex !== activeFloorIndex;
-              }),
-            ),
-      )
-    : [];
+  const projected = floor ? projectedZonesForFloor(project, floor.id) : [];
 
   return (
     <div className="page">
@@ -422,14 +304,14 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
           </>
         )}
         <span className="spacer" />
-        <button onClick={undo} disabled={!canUndo} title="Ctrl+Z">⟲ Отменить</button>
-        <button onClick={redo} disabled={!canRedo} title="Ctrl+Y">⟳ Вернуть</button>
-        <button onClick={save} disabled={!dirty}>
-          {dirty ? 'Сохранить изменения' : 'Сохранено'}
+        <button onClick={store.undo} disabled={!store.canUndo} title="Ctrl+Z">⟲ Отменить</button>
+        <button onClick={store.redo} disabled={!store.canRedo} title="Ctrl+Y">⟳ Вернуть</button>
+        <button onClick={store.save} disabled={!store.dirty}>
+          {store.dirty ? 'Сохранить изменения' : 'Сохранено'}
         </button>
       </div>
-      {error && <p className="error">{error}</p>}
-      {notice && <div className="banner ok">{notice}</div>}
+      {store.error && <p className="error">{store.error}</p>}
+      {store.notice && <div className="banner ok">{store.notice}</div>}
       <div className="card">
         <h2>Варианты расстановки</h2>
         <div className="row">
@@ -449,19 +331,19 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
         </div>
         {project.snapshots.length > 0 && (
           <ul className="locks">
-            {project.snapshots.map((s) => (
-              <li key={s.id}>
+            {project.snapshots.map((sn) => (
+              <li key={sn.id}>
                 <span>
-                  <b>{s.name}</b>
-                  {s.note ? ` — ${s.note}` : ''}
-                  <span className="muted"> · объектов: {s.placements.length}</span>
+                  <b>{sn.name}</b>
+                  {sn.note ? ` — ${sn.note}` : ''}
+                  <span className="muted"> · объектов: {sn.placements.length}</span>
                 </span>
                 <span className="row">
-                  <button onClick={() => restoreSnapshot(s.id)}>Вернуть</button>
-                  <button onClick={() => setCompareWith(compareWith === s.id ? null : s.id)}>
-                    {compareWith === s.id ? 'Скрыть сравнение' : 'Сравнить с планом'}
+                  <button onClick={() => restoreSnapshot(sn.id)}>Вернуть</button>
+                  <button onClick={() => setCompareWith(compareWith === sn.id ? null : sn.id)}>
+                    {compareWith === sn.id ? 'Скрыть сравнение' : 'Сравнить с планом'}
                   </button>
-                  <button onClick={() => deleteSnapshot(s.id)}>Удалить</button>
+                  <button onClick={() => deleteSnapshot(sn.id)}>Удалить</button>
                 </span>
               </li>
             ))}
@@ -479,7 +361,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                   <p>
                     <b>Переехало:</b>{' '}
                     {diff.moved
-                      .map((m) => `${m.object.name} (${roomNameById(m.from.roomId)} → ${roomNameById(m.to.roomId)})`)
+                      .map((m) => `${m.object.name} (${roomLabel(project, m.from.roomId)} → ${roomLabel(project, m.to.roomId)})`)
                       .join('; ')}
                   </p>
                 )}
@@ -520,7 +402,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
               counters: project.counters,
             }}
             onChange={(next) =>
-              update((p) => {
+              store.update((p) => {
                 const shell = p.floors.find((f) => f.id === floor.id)!.shell;
                 shell.contour = next.contour;
                 shell.openings = next.openings;
@@ -544,8 +426,8 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                   floors: project.floors,
                   floorId: floor.id,
                 }}
-                    onChange={(next) =>
-                  update((p) => {
+                onChange={(next) =>
+                  store.update((p) => {
                     const f = p.floors.find((f) => f.id === floor.id)!;
                     const r = f.rooms.find((r) => r.id === editingRoomId)!;
                     r.contour = next.contour;
@@ -565,7 +447,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 title="Имя этажа"
                 style={{ width: 160, fontWeight: 700 }}
                 onChange={(e) =>
-                  update((p) => {
+                  store.update((p) => {
                     p.floors.find((f) => f.id === floor.id)!.name = e.target.value;
                   })
                 }
@@ -589,7 +471,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                         title="Имя помещения"
                         style={{ width: 140 }}
                         onChange={(e) =>
-                          update((p) => {
+                          store.update((p) => {
                             const f = p.floors.find((f2) => f2.id === floor.id)!;
                             const target = f.rooms.find((r2) => r2.id === r.id)!;
                             target.name = e.target.value;
@@ -613,10 +495,10 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 project={project}
                 floorId={floor.id}
                 objects={project.objects}
-                projectedZones={projectedZones}
+                projectedZones={projected}
                 highlight={highlightIds}
                 onChangeFloors={(floors) =>
-                  update((p) => {
+                  store.update((p) => {
                     p.floors = floors;
                   })
                 }
@@ -627,39 +509,36 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
                 onCheckImport={checkImport}
                 onAcceptImport={acceptImport}
                 onRejectImport={rejectImport}
-                status={(objectId) => {
-                  const located = locateObject(project, objectId);
-                  return located ? `${located.floor.name}: ${located.room.name}` : 'на складе';
-                }}
+                status={(objectId) => objectLocation(project, objectId)}
                 onCreate={(object) =>
-                  update((p) => {
+                  store.update((p) => {
                     const id = allocateId(p, 'object');
                     p.counters.object = id;
                     p.objects.push({ ...object, id });
                   })
                 }
                 onUpdate={(object) =>
-                  update((p) => {
+                  store.update((p) => {
                     const idx = p.objects.findIndex((o) => o.id === object.id);
                     if (idx >= 0) p.objects[idx] = object;
                   })
                 }
                 onClone={(object) =>
-                  update((p) => {
+                  store.update((p) => {
                     const id = allocateId(p, 'object');
                     p.counters.object = id;
                     p.objects.push({ ...structuredClone(object), id, name: object.name + ' (копия)' });
                   })
                 }
                 onDelete={(objectId) =>
-                  update((p) => {
+                  store.update((p) => {
                     const cleaned = deleteObject(p, objectId);
                     p.objects = cleaned.objects;
                     p.floors = cleaned.floors;
                   })
                 }
                 onPlace={(objectId) =>
-                  update((p) => {
+                  store.update((p) => {
                     const target = p.floors.find((f2) => f2.id === floor.id)!;
                     const room = largestRoom(target);
                     if (!room) return;
