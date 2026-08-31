@@ -3,6 +3,7 @@ import {
   canSlide,
   chainInfo,
   crossings,
+  makeOpening,
   deletePoint,
   lockLabel,
   NO_CLEARANCE,
@@ -21,7 +22,7 @@ import {
 } from '@houseplan/shared';
 import { createContourDimensionPinner, type ContourDimensionPinner } from './constraints/pinContourDimension';
 import { PLANEGCS_WASM_URL } from './constraints/planegcsWasm';
-import { OPENING_DEFAULTS, PARTITION_THICKNESS_CM } from './editorConstants';
+import { PARTITION_THICKNESS_CM } from './editorConstants';
 import { projectOntoWall, reduceDimensionSelection, snapPoint } from './editorMachine';
 import { contourCentroid, OPENING_LABELS } from '../planScene';
 import type { Banner, CanvasPointerEvent, EditablePlan, RoomEditorProps, ZoneDraft } from './editorTypes';
@@ -276,20 +277,9 @@ export function useEditorSession({ plan, onChange }: Pick<RoomEditorProps, 'plan
     const start = points[event.target.wallIndex];
     const end = points[(event.target.wallIndex + 1) % points.length];
     const direction = unitDirection(start, end);
-    const wallLength = Math.hypot(end.x - start.x, end.y - start.y);
     const along = (event.position.x - start.x) * direction.x + (event.position.y - start.y) * direction.y;
-    const defaults = OPENING_DEFAULTS[openingMode];
-    const opening: Opening = {
-      id: nextId('opening'),
-      kind: openingMode,
-      wallPointId: start.id,
-      offsetCm: Math.max(0, Math.min(Math.round(along - defaults.width / 2), Math.max(0, Math.round(wallLength) - defaults.width))),
-      widthCm: defaults.width,
-      sillCm: defaults.sill,
-      topCm: defaults.top,
-      heightCm: defaults.height,
-      attributes: [],
-    };
+    const opening = makeOpening(contour, openingMode, start.id, along, nextId('opening'));
+    if (!opening) return;
     emit({ openings: [...plan.openings, opening] });
     setOpeningMode(null);
     say('ok', `${OPENING_LABELS[opening.kind]}: ${opening.offsetCm} см от угла, ширина ${opening.widthCm} см.`);

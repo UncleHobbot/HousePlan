@@ -2,7 +2,13 @@
 // Проём хранит сантиметры от угла стены, но при изменении длины стены
 // смещение пересчитывается пропорционально — проём не вылезает за край.
 
-import type { Cm, Point } from './index.js';
+import type { Cm, Contour, Opening, OpeningKind, Point } from './index.js';
+
+export const OPENING_DEFAULTS: Record<OpeningKind, { width: number; sill?: number; top?: number; height?: number }> = {
+  window: { width: 120, sill: 90, top: 220 },
+  entryDoor: { width: 100, height: 200 },
+  innerDoor: { width: 90, height: 200 },
+};
 
 export interface Wall {
   a: Point;
@@ -40,6 +46,36 @@ export function openingSegment(
   const start = { x: Math.round(wall.a.x + ux * offset), y: Math.round(wall.a.y + uy * offset) };
   const end = { x: Math.round(start.x + ux * widthCm), y: Math.round(start.y + uy * widthCm) };
   return { start, end };
+}
+
+/**
+ * Создать проём на стене: смещение центрируется по точке клика
+ * и не вылезает за край стены (дефолты ширины и высот — по типу проёма).
+ */
+export function makeOpening(
+  contour: Contour,
+  kind: OpeningKind,
+  wallPointId: number,
+  alongCm: Cm,
+  id: number,
+): Opening | null {
+  const wall = wallByPoint(contour.points, wallPointId);
+  if (!wall) return null;
+  const defaults = OPENING_DEFAULTS[kind];
+  const length = Math.abs(wall.b.x - wall.a.x) + Math.abs(wall.b.y - wall.a.y);
+  const along = Math.round(alongCm - defaults.width / 2);
+  const offset = Math.max(0, Math.min(along, Math.max(0, length - defaults.width)));
+  return {
+    id,
+    kind,
+    wallPointId,
+    offsetCm: offset,
+    widthCm: defaults.width,
+    sillCm: defaults.sill,
+    topCm: defaults.top,
+    heightCm: defaults.height,
+    attributes: [],
+  };
 }
 
 /**
