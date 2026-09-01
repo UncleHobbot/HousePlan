@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import type { AssistantCard, ObjectCategory, SceneObject } from '@houseplan/shared';
+import type { ObjectCategory, SceneObject } from '@houseplan/shared';
 import { NO_CLEARANCE } from '@houseplan/shared';
+import { fileFailureMessage, type ImportCard } from './api';
 import { CommitInput } from './CommitInput';
 
 const CATEGORY_LABELS: Record<ObjectCategory, string> = {
@@ -36,7 +37,7 @@ export function StockPanel({
   /** где объект: текст статуса для списка */
   status: (objectId: number) => string;
   /** карточки в папке импорта (null — ещё не проверяли) */
-  importCards: Array<{ file: string; card: AssistantCard }> | null;
+  importCards: ImportCard[] | null;
   onCheckImport: () => void;
   onAcceptImport: (file: string) => void;
   onRejectImport: (file: string) => void;
@@ -75,21 +76,33 @@ export function StockPanel({
           <p className="muted">Папка импорта пуста.</p>
         )}
         <ul className="locks">
-          {(importCards ?? []).map(({ file, card }) => (
-            <li key={file}>
-              <span>
-                <b>{card.name ?? file}</b>
-                <span className="muted">
-                  {' '}
-                  {card.source?.vendor ? `· ${card.source.vendor}` : ''}
-                  {card.source?.price_cad ? ` · ${card.source.price_cad} CAD` : ''}
-                  {card.source?.confidence === 'estimated' ? ' · оценка по фото' : ''}
-                </span>
-              </span>
-              <span className="row">
-                <button className="primary" onClick={() => onAcceptImport(file)}>Принять</button>
-                <button onClick={() => onRejectImport(file)}>Отклонить</button>
-              </span>
+          {(importCards ?? []).map((item) => (
+            <li key={item.file}>
+              {item.status === 'ready' ? (
+                <>
+                  <span>
+                    <b>{item.card.name ?? item.file}</b>
+                    <span className="muted">
+                      {' '}
+                      {item.card.source?.vendor ? `· ${item.card.source.vendor}` : ''}
+                      {item.card.source?.price_cad ? ` · ${item.card.source.price_cad} CAD` : ''}
+                      {item.card.source?.confidence === 'estimated' ? ' · оценка по фото' : ''}
+                    </span>
+                  </span>
+                  <span className="row">
+                    <button className="primary" onClick={() => onAcceptImport(item.file)}>Принять</button>
+                    <button onClick={() => onRejectImport(item.file)}>Отклонить</button>
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="bad-text">
+                    <b>{item.file}</b> — повреждённая карточка: {fileFailureMessage(item.error)}
+                    {item.error.issues?.[0] ? ` (${item.error.issues[0].path})` : ''}
+                  </span>
+                  <button onClick={() => onRejectImport(item.file)}>Отклонить</button>
+                </>
+              )}
             </li>
           ))}
         </ul>

@@ -7,7 +7,7 @@ import {
   projectedZonesForFloor,
   roomLabel,
 } from '@houseplan/shared';
-import { api, type ImportCard, type ProjectSummary } from './api';
+import { api, fileFailureMessage, type ImportCard, type ProjectSummary } from './api';
 import { CommitInput } from './CommitInput';
 import { FloorView } from './FloorView';
 import { RoomEditor } from './editor/RoomEditor';
@@ -79,11 +79,16 @@ export function App() {
         <ul className="cards">
           {projects.map((p) => (
             <li key={p.name}>
-              <button className="card" onClick={() => setOpenName(p.name)}>
+              <button className="card" disabled={p.status === 'invalid'} onClick={() => setOpenName(p.name)}>
                 <b>{p.name}</b>
-                <span className="muted">
-                  этажей: {p.floors} · объектов: {p.objects}
-                </span>
+                {p.status === 'ready' ? (
+                  <span className="muted">этажей: {p.floors} · объектов: {p.objects}</span>
+                ) : (
+                  <span className="bad-text">
+                    Повреждён: {fileFailureMessage(p.error)}
+                    {p.error.issues?.[0] ? ` (${p.error.issues[0].path})` : ''}
+                  </span>
+                )}
               </button>
             </li>
           ))}
@@ -118,19 +123,23 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
     try {
       setImportCards(await api.listImport());
     } catch (e) {
-      store.setError(e instanceof Error ? e.message : String(e));
+      store.reportError(e);
     }
   }
 
   async function acceptImport(file: string) {
+    if (dirty) {
+      store.setError('Сначала сохраните изменения проекта, затем примите импорт.');
+      return;
+    }
     try {
-      const result = await api.acceptImport(file, name);
+      const result = await api.acceptImport(file, name, store.token);
       // сервер уже сохранил проект; состояние участвует в отмене
-      store.dispatch({ type: 'importAccepted', project: result.project });
+      store.adoptServerDocument(result.document, 'importAccepted');
       setImportCards(await api.listImport());
       store.say(`Объект «${result.object.name}» принят на склад с пометкой «не подтверждено».`);
     } catch (e) {
-      store.setError(e instanceof Error ? e.message : String(e));
+      store.reportError(e);
     }
   }
 
@@ -139,7 +148,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
       await api.rejectImport(file);
       setImportCards(await api.listImport());
     } catch (e) {
-      store.setError(e instanceof Error ? e.message : String(e));
+      store.reportError(e);
     }
   }
 
@@ -149,14 +158,18 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
       setRenaming(false);
       return;
     }
+    if (dirty) {
+      store.setError('Сначала сохраните изменения проекта, затем переименуйте его.');
+      return;
+    }
     try {
-      const result = await api.renameProject(name, newName);
-      store.dispatch({ type: 'projectRenamed', project: result.project });
+      const result = await api.renameProject(name, newName, store.token);
+      store.adoptServerDocument(result, 'projectRenamed');
       setRenaming(false);
       onRenamed(newName);
       store.say(`Проект переименован в «${newName}».`);
     } catch (e) {
-      store.setError(e instanceof Error ? e.message : String(e));
+      store.reportError(e);
     }
   }
 
@@ -359,11 +372,22 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
         <span className="spacer" />
         <button onClick={store.undo} disabled={!store.canUndo} title="Ctrl+Z">⟲ Отменить</button>
         <button onClick={store.redo} disabled={!store.canRedo} title="Ctrl+Y">⟳ Вернуть</button>
-        <button onClick={store.save} disabled={!store.dirty}>
-          {store.dirty ? 'Сохранить изменения' : 'Сохранено'}
+        <button onClick={() => store.save()} disabled={!store.dirty || store.saving}>
+          {store.saving ? 'Сохранение…' : store.dirty ? 'Сохранить изменения' : 'Сохранено'}
         </button>
       </div>
       {store.error && <p className="error">{store.error}</p>}
+      {store.conflict && (
+        <div className="banner error">
+          <span>На диске есть более новая версия.</span>{' '}
+          <button onClick={() => {
+            if (!store.dirty || window.confirm('Отбросить локальные изменения и загрузить версию с диска?')) {
+              store.reloadFromDisk();
+            }
+          }}>Перезагрузить с диска</button>
+          <button onClick={() => store.save(true)}>Перезаписать моей версией</button>
+        </div>
+      )}
       {store.notice && <div className="banner ok">{store.notice}</div>}
       <div className="card">
         <h2>Варианты расстановки</h2>

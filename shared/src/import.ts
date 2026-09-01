@@ -32,10 +32,10 @@ export function cardToSceneObject(card: AssistantCard): Omit<SceneObject, 'id'> 
       left: 0,
       right: 0,
     },
-    source: card.source
+    source: card.source?.url
       ? {
           vendor: String(card.source.vendor ?? ''),
-          url: String(card.source.url ?? ''),
+          url: card.source.url,
           priceCad: toInt(card.source.price_cad, 0) || undefined,
           confidence: card.source.confidence === 'estimated' ? 'estimated' : 'retailer',
         }

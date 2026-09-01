@@ -45,6 +45,12 @@ test('неизвестная категория становится «проч�
   assert.equal(object.source, undefined);
 });
 
+test('частичный источник без ссылки не создаёт повреждённый источник проекта', () => {
+  const object = cardToSceneObject({ source: { vendor: 'Неизвестный магазин' } });
+
+  assert.equal(object.source, undefined);
+});
+
 test('acceptCard выдаёт следующий id и не меняет исходный проект', () => {
   const project = {
     formatVersion: 1, name: 'Дом', floors: [], objects: [], snapshots: [],

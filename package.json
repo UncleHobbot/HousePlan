@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @houseplan/shared && npm run build -w @houseplan/backend && npm run build -w @houseplan/frontend",
-    "test": "npm test -w @houseplan/shared && npm test -w @houseplan/frontend",
+    "test": "npm test -w @houseplan/shared && npm test -w @houseplan/backend && npm test -w @houseplan/frontend",
     "dev:backend": "npm run dev -w @houseplan/backend",
     "dev:frontend": "npm run dev -w @houseplan/frontend",
     "start": "npm run start -w @houseplan/backend"

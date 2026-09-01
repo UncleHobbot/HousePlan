@@ -143,7 +143,7 @@ test('read возвращает все вложенные ошибки с уст
   assert.equal(result.error.code, 'invalid-project');
   assert.deepEqual(result.error.issues, [
     { code: 'invalid-type', path: '/floors/0/name' },
-    { code: 'unknown-field', path: '/floors/0' },
+    { code: 'unknown-field', path: '/floors/0/extra' },
   ]);
 });
 
@@ -211,6 +211,31 @@ test('read исполняет геометрические правила зам
   assert.ok(issues.some((issue) => issue.code === 'zone-too-few-points' && issue.path === '/floors/0/rooms/0/zones/0/points'));
 });
 
+test('read допускает незавершённую оболочку, но отклоняет незамкнутое помещение и поля не своего типа проёма', async () => {
+  const dataDir = await temporaryDataDir();
+  const project = completeProject();
+  project.floors[0].shell.contour.closed = false;
+  project.floors[0].shell.contour.points = project.floors[0].shell.contour.points.slice(0, 2);
+  project.floors[0].shell.contour.thicknesses = { 1: 20, 2: 20 };
+  project.floors[0].shell.contour.locks = [];
+  project.floors[0].rooms[0].contour.closed = false;
+  project.floors[0].shell.openings[0].heightCm = 200;
+  project.floors[0].rooms[0].openings[0].sillCm = 90;
+  await fs.mkdir(path.join(dataDir, 'проекты', project.name), { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'проекты', project.name, 'план.json'), JSON.stringify(project), 'utf8');
+
+  const result = await createProjectFiles(dataDir).read(project.name);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.error.issues.some((issue) => issue.code === 'room-contour-open' && issue.path === '/floors/0/rooms/0/contour/closed'));
+  assert.ok(result.error.issues.some((issue) => issue.code === 'invalid-opening-field' && issue.path === '/floors/0/shell/openings/0/heightCm'));
+  assert.ok(result.error.issues.some((issue) => issue.code === 'invalid-opening-field' && issue.path === '/floors/0/rooms/0/openings/0/sillCm'));
+  assert.ok(
+    !result.error.issues.some((issue) => issue.path.startsWith('/floors/0/shell/contour')),
+    JSON.stringify(result.error.issues),
+  );
+});
+
 test('read безопасно восстанавливает отсутствующие или повреждённые производные счётчики', async () => {
   const dataDir = await temporaryDataDir();
   const expectedCounters = { floor: 1, room: 1, point: 12, opening: 2, zone: 1, object: 1, snapshot: 1 };
@@ -227,6 +252,19 @@ test('read безопасно восстанавливает отсутству�
     assert.equal(result.ok, true);
     assert.deepEqual(result.value.project.counters, expectedCounters);
   }
+});
+
+test('read восстанавливает известные счётчики, но не скрывает неизвестные поля counters', async () => {
+  const dataDir = await temporaryDataDir();
+  const project = completeProject();
+  project.counters = { object: 'сломано', furniture: 12 };
+  await fs.mkdir(path.join(dataDir, 'проекты', project.name), { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'проекты', project.name, 'план.json'), JSON.stringify(project), 'utf8');
+
+  const result = await createProjectFiles(dataDir).read(project.name);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.error.issues, [{ code: 'unknown-field', path: '/counters/furniture' }]);
 });
 
 test('create атомарно создаёт один проект и отклоняет повторное имя', async () => {
@@ -247,6 +285,17 @@ test('create атомарно создаёт один проект и откло
   const stored = JSON.parse(await fs.readFile(path.join(dataDir, 'проекты', 'Новый дом', 'план.json'), 'utf8'));
   assert.equal(stored.name, 'Новый дом');
   assert.equal(stored.formatVersion, 1);
+});
+
+test('create отклоняет скрытые и небезопасные для Windows имена проектов', async () => {
+  const dataDir = await temporaryDataDir();
+  const projectFiles = createProjectFiles(dataDir);
+
+  for (const name of ['.скрытый', '.', 'CON', 'Дом.']) {
+    const result = await projectFiles.create(name);
+    assert.equal(result.ok, false, name);
+    assert.equal(result.error.code, 'invalid-project-name', name);
+  }
 });
 
 test('save не затирает более новую версию и допускает явную перезапись', async () => {
@@ -379,4 +428,153 @@ test('следующая операция завершает переимено�
   assert.deepEqual(listed.value, [{ name: 'После сбоя', status: 'ready', floors: 0, objects: 0 }]);
   assert.equal(JSON.parse(await fs.readFile(path.join(newDirectory, 'план.json'), 'utf8')).name, 'После сбоя');
   await assert.rejects(fs.access(path.join(transactionDirectory, 'project-file.json')));
+});
+
+test('acceptImport строго проверяет карточку до изменения проекта', async () => {
+  const dataDir = await temporaryDataDir();
+  const projectFiles = createProjectFiles(dataDir);
+  const created = await projectFiles.create('Дом');
+  assert.equal(created.ok, true);
+  await fs.mkdir(path.join(dataDir, '_import'), { recursive: true });
+  await fs.writeFile(path.join(dataDir, '_import', 'плохая.json'), JSON.stringify({
+    size: { w: '100' },
+    images: ['../чужой.jpg'],
+    extra: true,
+  }), 'utf8');
+
+  const result = await projectFiles.acceptImport('плохая.json', 'Дом', {
+    expectedToken: created.value.token,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'invalid-card');
+  assert.deepEqual(result.error.issues, [
+    { code: 'invalid-type', path: '/size/w' },
+    { code: 'invalid-value', path: '/images/0' },
+    { code: 'unknown-field', path: '/extra' },
+  ]);
+  const stored = await projectFiles.read('Дом');
+  assert.equal(stored.ok, true);
+  assert.deepEqual(stored.value.project.objects, []);
+});
+
+test('acceptImport отклоняет имена картинок, небезопасные для общего тома Windows/NAS', async () => {
+  const dataDir = await temporaryDataDir();
+  const projectFiles = createProjectFiles(dataDir);
+  const created = await projectFiles.create('Дом');
+  assert.equal(created.ok, true);
+  await fs.mkdir(path.join(dataDir, '_import'), { recursive: true });
+  await fs.writeFile(path.join(dataDir, '_import', 'картинка.json'), JSON.stringify({
+    images: ['CON.jpg', 'фото:.jpg', 'фото.'],
+  }), 'utf8');
+
+  const result = await projectFiles.acceptImport('картинка.json', 'Дом', {
+    expectedToken: created.value.token,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'invalid-card');
+  assert.deepEqual(result.error.issues?.map((issue) => issue.path), ['/images/0', '/images/1', '/images/2']);
+});
+
+test('acceptImport не создаёт объект со ссылкой на отсутствующую картинку', async () => {
+  const dataDir = await temporaryDataDir();
+  const projectFiles = createProjectFiles(dataDir);
+  const created = await projectFiles.create('Дом');
+  assert.equal(created.ok, true);
+  await fs.mkdir(path.join(dataDir, '_import'), { recursive: true });
+  await fs.writeFile(path.join(dataDir, '_import', 'без-картинки.json'), JSON.stringify({
+    name: 'Кресло',
+    images: ['нет.jpg'],
+  }), 'utf8');
+
+  const result = await projectFiles.acceptImport('без-картинки.json', 'Дом', {
+    expectedToken: created.value.token,
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.error, {
+    code: 'asset-missing',
+    issues: [{ code: 'asset-missing', path: '/images/0', details: { name: 'нет.jpg' } }],
+  });
+  const stored = await projectFiles.read('Дом');
+  assert.equal(stored.ok, true);
+  assert.deepEqual(stored.value.project.objects, []);
+});
+
+test('acceptImport принимает карточку и повторный запрос не создаёт второй объект', async () => {
+  const dataDir = await temporaryDataDir();
+  const projectFiles = createProjectFiles(dataDir);
+  const created = await projectFiles.create('Дом');
+  assert.equal(created.ok, true);
+  await fs.mkdir(path.join(dataDir, '_import'), { recursive: true });
+  await fs.writeFile(path.join(dataDir, '_import', 'кресло.json'), JSON.stringify({
+    name: 'Кресло',
+    category: 'неизвестная-категория',
+    size: { w: 80.4, d: 90, h: 100 },
+    images: ['кресло.jpg'],
+    source: { vendor: 'Без ссылки' },
+  }), 'utf8');
+  await fs.writeFile(path.join(dataDir, '_import', 'кресло.jpg'), Buffer.from('image'));
+
+  const [first, repeated] = await Promise.all([
+    projectFiles.acceptImport('кресло.json', 'Дом', { expectedToken: created.value.token }),
+    projectFiles.acceptImport('кресло.json', 'Дом', { expectedToken: created.value.token }),
+  ]);
+
+  assert.equal(first.ok, true);
+  assert.equal(repeated.ok, true);
+  assert.equal(first.value.object.id, repeated.value.object.id);
+  assert.equal(first.value.object.category, 'other');
+  assert.equal(first.value.object.widthCm, 80);
+  assert.equal(first.value.object.source, undefined);
+  const stored = await projectFiles.read('Дом');
+  assert.equal(stored.ok, true);
+  assert.equal(stored.value.project.objects.length, 1);
+  assert.equal(await fs.readFile(path.join(dataDir, 'проекты', 'Дом', 'картинки', 'кресло.jpg'), 'utf8'), 'image');
+  await fs.access(path.join(dataDir, '_import', 'принятые', 'кресло.json'));
+  await assert.rejects(fs.access(path.join(dataDir, '_import', 'кресло.json')));
+});
+
+test('следующая операция завершает импорт, прерванный после записи проекта и картинки', async () => {
+  const dataDir = await temporaryDataDir();
+  const projectFiles = createProjectFiles(dataDir);
+  const created = await projectFiles.create('Дом');
+  assert.equal(created.ok, true);
+  const importDirectory = path.join(dataDir, '_import');
+  const acceptedDirectory = path.join(importDirectory, 'принятые');
+  await fs.mkdir(importDirectory, { recursive: true });
+  const cardRaw = JSON.stringify({ name: 'Лампа', images: ['лампа.jpg'] });
+  const imageRaw = Buffer.from('image');
+  await fs.writeFile(path.join(importDirectory, 'лампа.json'), cardRaw, 'utf8');
+  await fs.writeFile(path.join(importDirectory, 'лампа.jpg'), imageRaw);
+  const accepted = await projectFiles.acceptImport('лампа.json', 'Дом', { expectedToken: created.value.token });
+  assert.equal(accepted.ok, true);
+
+  const afterRaw = await fs.readFile(path.join(dataDir, 'проекты', 'Дом', 'план.json'), 'utf8');
+  await fs.rename(path.join(acceptedDirectory, 'лампа.json'), path.join(importDirectory, 'лампа.json'));
+  await fs.rm(path.join(acceptedDirectory, 'лампа.json.receipt.json'));
+  const transactionDirectory = path.join(dataDir, '_transactions');
+  await fs.mkdir(transactionDirectory, { recursive: true });
+  await fs.writeFile(path.join(transactionDirectory, 'project-file.json'), JSON.stringify({
+    kind: 'accept-import',
+    file: 'лампа.json',
+    projectName: 'Дом',
+    cardToken: createHash('sha256').update(cardRaw).digest('hex'),
+    beforeToken: created.value.token,
+    afterRaw,
+    object: accepted.value.object,
+    assets: [{ name: 'лампа.jpg', token: createHash('sha256').update(imageRaw).digest('hex') }],
+  }), 'utf8');
+
+  const listed = await createProjectFiles(dataDir).list();
+
+  assert.equal(listed.ok, true);
+  await fs.access(path.join(acceptedDirectory, 'лампа.json'));
+  await fs.access(path.join(acceptedDirectory, 'лампа.json.receipt.json'));
+  await fs.access(path.join(dataDir, 'проекты', 'Дом', 'картинки', 'лампа.jpg'));
+  await assert.rejects(fs.access(path.join(transactionDirectory, 'project-file.json')));
+  const stored = await createProjectFiles(dataDir).read('Дом');
+  assert.equal(stored.ok, true);
+  assert.equal(stored.value.project.objects.length, 1);
 });

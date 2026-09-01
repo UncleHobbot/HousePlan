@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { api } from './api';
+import { api, ApiError, type ProjectDocument } from './api';
 import { createProjectSession, type ProjectIntent } from './projectSession';
 
 /**
@@ -11,17 +11,34 @@ export function useProjectStore(name: string) {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [token, setToken] = useState('');
+  const [conflict, setConflict] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  function errorMessage(reason: unknown): string {
+    if (!(reason instanceof ApiError)) return reason instanceof Error ? reason.message : String(reason);
+    const paths = reason.issues?.slice(0, 3).map((issue) => issue.path).join(', ');
+    return paths ? `${reason.message} Проверить: ${paths}.` : reason.message;
+  }
+
+  function reportError(reason: unknown) {
+    if (reason instanceof ApiError && reason.code === 'stale-project') setConflict(true);
+    setError(errorMessage(reason));
+  }
 
   useEffect(() => {
     let cancelled = false;
     setError('');
     api
       .readProject(name)
-      .then((project) => {
-        if (!cancelled) session.dispatch({ type: 'projectLoaded', project });
+      .then((document) => {
+        if (!cancelled) {
+          setToken(document.token);
+          session.dispatch({ type: 'projectLoaded', project: document.project });
+        }
       })
       .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+        if (!cancelled) setError(errorMessage(reason));
       });
     return () => {
       cancelled = true;
@@ -38,17 +55,40 @@ export function useProjectStore(name: string) {
     if (result.ok) setNotice('Действие возвращено.');
   }
 
-  async function save() {
+  async function save(force = false) {
     const request = session.getSnapshot();
-    if (!request.project || request.gestureActive) return;
+    if (!request.project || request.gestureActive || !token || saving) return;
+    setSaving(true);
     try {
-      await api.saveProject(name, request.project);
+      const document = await api.saveProject(name, request.project, token, force);
+      setToken(document.token);
       session.dispatch({ type: 'saveAcknowledged', revision: request.revision });
       setError('');
+      setConflict(false);
     } catch (reason) {
       session.dispatch({ type: 'saveRejected', revision: request.revision });
-      setError(reason instanceof Error ? reason.message : String(reason));
+      reportError(reason);
+    } finally {
+      setSaving(false);
     }
+  }
+
+  async function reloadFromDisk() {
+    try {
+      const document = await api.readProject(name);
+      setToken(document.token);
+      session.dispatch({ type: 'projectLoaded', project: document.project });
+      setConflict(false);
+      setError('');
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  function adoptServerDocument(document: ProjectDocument, type: 'projectRenamed' | 'importAccepted') {
+    setToken(document.token);
+    setConflict(false);
+    session.dispatch({ type, project: document.project });
   }
 
   useEffect(() => {
@@ -78,10 +118,16 @@ export function useProjectStore(name: string) {
     error,
     setError,
     notice,
+    token,
+    conflict,
+    saving,
     say: setNotice,
     dispatch,
     undo,
     redo,
     save,
+    reloadFromDisk,
+    adoptServerDocument,
+    reportError,
   };
 }

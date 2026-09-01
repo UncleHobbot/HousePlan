@@ -1,277 +1,124 @@
 import express from 'express';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { acceptCard, FORMAT_VERSION, Project, type AssistantCard, type ProjectCounters } from '@houseplan/shared';
+import { FORMAT_VERSION } from '@houseplan/shared';
+import { createProjectFiles, type ProjectFileFailure } from './projectFiles.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
+const modulePath = fileURLToPath(import.meta.url);
+const moduleDirectory = path.dirname(modulePath);
 const PORT = Number(process.env.PORT ?? 3000);
-// корень данных: на Synology это том в контейнере, в разработке — папка data/
-const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '..', '..', 'data');
-const PROJECTS_DIR = path.join(DATA_DIR, 'проекты');
-const IMPORT_DIR = path.join(DATA_DIR, '_import');
-const FRONTEND_DIST = path.join(__dirname, '..', '..', 'frontend', 'dist');
+const DATA_DIR = process.env.DATA_DIR ?? path.join(moduleDirectory, '..', '..', 'data');
+const FRONTEND_DIST = path.join(moduleDirectory, '..', '..', 'frontend', 'dist');
 
-async function ensureDataDirs() {
-  for (const dir of [PROJECTS_DIR, IMPORT_DIR, path.join(IMPORT_DIR, 'принятые')]) {
-    await fs.mkdir(dir, { recursive: true });
-  }
-}
-
-function projectDir(name: string): string {
-  // имя проекта = имя папки; запрещаем выход за пределы папки проектов
-  // и символы, недопустимые в папках Windows
-  if (!name || /[\/\\:?*"<>|]/.test(name) || name.includes('..')) {
-    throw new Error('недопустимое имя проекта');
-  }
-  return path.join(PROJECTS_DIR, name);
-}
-
-async function readProject(name: string): Promise<Project> {
-  const raw = await fs.readFile(path.join(projectDir(name), 'план.json'), 'utf8');
-  const parsed = JSON.parse(raw) as Project;
-  if (parsed.formatVersion !== FORMAT_VERSION) {
-    throw new Error(`версия формата ${parsed.formatVersion} не поддерживается, ожидается ${FORMAT_VERSION}`);
-  }
-  if (!Array.isArray(parsed.floors) || !Array.isArray(parsed.objects) || !Array.isArray(parsed.snapshots)) {
-    throw new Error('файл проекта повреждён');
-  }
-  return parsed;
-}
-
-async function writeProject(project: Project): Promise<void> {
-  const dir = projectDir(project.name);
-  await fs.mkdir(dir, { recursive: true });
-  const target = path.join(dir, 'план.json');
-  const temporary = path.join(dir, `.план-${process.pid}-${Date.now()}.tmp`);
-  try {
-    await fs.writeFile(temporary, JSON.stringify(project, null, 2), 'utf8');
-    await fs.rename(temporary, target);
-  } catch (error) {
-    await fs.rm(temporary, { force: true });
-    throw error;
-  }
-}
-
-function isProject(value: unknown): value is Project {
-  if (typeof value !== 'object' || value === null) return false;
-  const project = value as Partial<Project>;
-  return (
-    project.formatVersion === FORMAT_VERSION &&
-    typeof project.name === 'string' &&
-    Array.isArray(project.floors) &&
-    Array.isArray(project.objects) &&
-    Array.isArray(project.snapshots) &&
-    typeof project.counters === 'object' &&
-    project.counters !== null
-  );
-}
-
-const app = express();
-app.use(express.json({ limit: '10mb' }));
-
-/** Обёртка: ошибка в обработчике не должна ронять весь сервер. */
 type Handler = (req: express.Request, res: express.Response) => Promise<void>;
+
 function asyncHandler(handler: Handler): express.RequestHandler {
   return (req, res) => {
     handler(req, res).catch((error) => {
       const message = error instanceof Error ? error.message : 'внутренняя ошибка';
-      if (!res.headersSent) res.status(500).json({ error: message });
+      if (!res.headersSent) res.status(500).json({ error: { code: 'internal-error', message } });
     });
   };
 }
 
-app.get('/api/version', (_req, res) => {
-  res.json({ formatVersion: FORMAT_VERSION });
-});
-
-app.get('/api/projects', asyncHandler(async (_req, res) => {
-  await ensureDataDirs();
-  const entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
-  const projects = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    try {
-      const project = await readProject(entry.name);
-      projects.push({ name: project.name, floors: project.floors.length, objects: project.objects.length });
-    } catch {
-      // папка без корректного плана не показывается
-    }
-  }
-  res.json(projects);
-}));
-
-app.post('/api/projects', asyncHandler(async (req, res) => {
-  const name = String(req.body?.name ?? '').trim();
-  if (!name) {
-    res.status(400).json({ error: 'укажите название проекта' });
-    return;
-  }
-  let dir: string;
-  try {
-    dir = projectDir(name);
-  } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : 'плохое имя' });
-    return;
-  }
-  const project: Project = {
-    formatVersion: FORMAT_VERSION,
-    name,
-    floors: [],
-    objects: [],
-    snapshots: [],
-    counters: {},
-  };
-  try {
-    await fs.mkdir(dir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      res.status(409).json({ error: 'проект с таким названием уже существует' });
-      return;
-    }
-    throw error;
-  }
-  await fs.writeFile(path.join(dir, 'план.json'), JSON.stringify(project, null, 2), { encoding: 'utf8', flag: 'wx' });
-  res.status(201).json(project);
-}));
-
-app.get('/api/projects/:name', asyncHandler(async (req, res) => {
-  try {
-    res.json(await readProject(req.params.name));
-  } catch (error) {
-    res.status(404).json({ error: error instanceof Error ? error.message : 'не найдено' });
-  }
-}));
-
-app.put('/api/projects/:name', asyncHandler(async (req, res) => {
-  try {
-    if (!isProject(req.body)) {
-      res.status(400).json({ error: 'файл проекта не соответствует формату' });
-      return;
-    }
-    const project = req.body;
-    if (project.name !== req.params.name) {
-      res.status(400).json({ error: 'имя проекта не совпадает' });
-      return;
-    }
-    if (project.formatVersion !== FORMAT_VERSION) {
-      res.status(400).json({ error: 'не поддерживаемая версия формата' });
-      return;
-    }
-    await writeProject(project);
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : 'ошибка сохранения' });
-  }
-}));
-
-app.post('/api/projects/:name/rename', asyncHandler(async (req, res) => {
-  const newName = String(req.body?.name ?? '').trim();
-  let newDir: string;
-  try {
-    newDir = projectDir(newName);
-  } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : 'плохое имя' });
-    return;
-  }
-  if (newName === req.params.name) {
-    res.json({ ok: true, name: newName });
-    return;
-  }
-  const project = await readProject(req.params.name);
-  try {
-    await fs.access(newDir);
-    res.status(409).json({ error: 'проект с таким названием уже существует' });
-    return;
-  } catch {
-    // папки нет — можно переименовывать
-  }
-  await fs.rename(projectDir(req.params.name), newDir);
-  project.name = newName;
-  await writeProject(project);
-  res.json({ ok: true, name: newName, project });
-}));
-
-// ---------- импорт карточек от ассистента (папка _import/) ----------
-
-
-
-function isSafeFileName(file: string): boolean {
-  return file.endsWith('.json') && !file.includes('/') && !file.includes('\\') && !file.includes('..');
+function errorStatus(error: ProjectFileFailure): number {
+  if (error.code === 'project-not-found' || error.code === 'import-not-found') return 404;
+  if (error.code === 'project-exists' || error.code === 'stale-project' || error.code.endsWith('-conflict')) return 409;
+  return 400;
 }
 
+function sendFailure(res: express.Response, error: ProjectFileFailure): void {
+  res.status(errorStatus(error)).json({ error });
+}
 
-app.get('/api/import', asyncHandler(async (_req, res) => {
-  await ensureDataDirs();
-  const files = await fs.readdir(IMPORT_DIR, { withFileTypes: true });
-  const cards = [];
-  for (const entry of files) {
-    if (!entry.isFile() || !isSafeFileName(entry.name)) continue;
-    try {
-      const card = JSON.parse(await fs.readFile(path.join(IMPORT_DIR, entry.name), 'utf8')) as AssistantCard;
-      cards.push({ file: entry.name, card });
-    } catch {
-      // файл без корректной карточки не показываем
-    }
-  }
-  res.json(cards);
-}));
+export function createApp(dataDirectory = DATA_DIR): express.Express {
+  const app = express();
+  const projectFiles = createProjectFiles(dataDirectory);
+  app.use(express.json({ limit: '10mb' }));
 
-app.post('/api/import/accept', asyncHandler(async (req, res) => {
-  const file = String(req.body?.file ?? '');
-  const projectName = String(req.body?.project ?? '');
-  if (!isSafeFileName(file)) {
-    res.status(400).json({ error: 'недопустимое имя файла' });
-    return;
-  }
-  const card = JSON.parse(await fs.readFile(path.join(IMPORT_DIR, file), 'utf8')) as AssistantCard;
-  const original = await readProject(projectName);
-  const { project: updated, object: created } = acceptCard(original, card);
-  const project = updated;
-  // картинки из папки импорта переезжают в папку картинок проекта
-  if ((created.images ?? []).length > 0) {
-    const imagesDir = path.join(projectDir(project.name), 'картинки');
-    await fs.mkdir(imagesDir, { recursive: true });
-    for (const image of created.images ?? []) {
-      await fs
-        .copyFile(path.join(IMPORT_DIR, path.basename(image)), path.join(imagesDir, path.basename(image)))
-        .catch(() => {
-          // картинки может не оказаться — объект всё равно принимается
-        });
-    }
-  }
-  await writeProject(project);
-  await fs.rename(path.join(IMPORT_DIR, file), path.join(IMPORT_DIR, 'принятые', file));
-  res.json({ project, object: created });
-}));
-
-app.post('/api/import/reject', asyncHandler(async (req, res) => {
-  const file = String(req.body?.file ?? '');
-  if (!isSafeFileName(file)) {
-    res.status(400).json({ error: 'недопустимое имя файла' });
-    return;
-  }
-  await ensureDataDirs();
-  const rejectedDir = path.join(IMPORT_DIR, 'отклонённые');
-  await fs.mkdir(rejectedDir, { recursive: true });
-  await fs.rename(path.join(IMPORT_DIR, file), path.join(rejectedDir, file));
-  res.json({ ok: true });
-}));
-
-// Раздача собранного фронтенда; в разработке фронтенд работает через vite dev
-app.use(express.static(FRONTEND_DIST));
-app.get(/^\/(?!api\/).*/, (_req, res) => {
-  res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
-});
-
-ensureDataDirs()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`HousePlan: http://localhost:${PORT} (данные: ${DATA_DIR})`);
-    });
-  })
-  .catch((error) => {
-    console.error('не удалось создать папки данных', error);
-    process.exit(1);
+  app.get('/api/version', (_req, res) => {
+    res.json({ formatVersion: FORMAT_VERSION });
   });
+
+  app.get('/api/projects', asyncHandler(async (_req, res) => {
+    const result = await projectFiles.list();
+    if (!result.ok) return sendFailure(res, result.error);
+    res.json(result.value);
+  }));
+
+  app.post('/api/projects', asyncHandler(async (req, res) => {
+    const result = await projectFiles.create(String(req.body?.name ?? ''));
+    if (!result.ok) return sendFailure(res, result.error);
+    res.status(201).json(result.value);
+  }));
+
+  app.get('/api/projects/:name', asyncHandler(async (req, res) => {
+    const result = await projectFiles.read(req.params.name);
+    if (!result.ok) return sendFailure(res, result.error);
+    res.json(result.value);
+  }));
+
+  app.put('/api/projects/:name', asyncHandler(async (req, res) => {
+    const result = await projectFiles.save(req.params.name, req.body?.project, {
+      expectedToken: String(req.body?.expectedToken ?? ''),
+      force: req.body?.force === true,
+    });
+    if (!result.ok) return sendFailure(res, result.error);
+    res.json(result.value);
+  }));
+
+  app.post('/api/projects/:name/rename', asyncHandler(async (req, res) => {
+    const result = await projectFiles.rename(req.params.name, String(req.body?.name ?? ''), {
+      expectedToken: String(req.body?.expectedToken ?? ''),
+    });
+    if (!result.ok) return sendFailure(res, result.error);
+    res.json(result.value);
+  }));
+
+  app.get('/api/import', asyncHandler(async (_req, res) => {
+    const result = await projectFiles.listImports();
+    if (!result.ok) return sendFailure(res, result.error);
+    res.json(result.value);
+  }));
+
+  app.post('/api/import/accept', asyncHandler(async (req, res) => {
+    const result = await projectFiles.acceptImport(
+      String(req.body?.file ?? ''),
+      String(req.body?.project ?? ''),
+      { expectedToken: String(req.body?.expectedToken ?? '') },
+    );
+    if (!result.ok) return sendFailure(res, result.error);
+    res.json(result.value);
+  }));
+
+  app.post('/api/import/reject', asyncHandler(async (req, res) => {
+    const result = await projectFiles.rejectImport(String(req.body?.file ?? ''));
+    if (!result.ok) return sendFailure(res, result.error);
+    res.json({ ok: true });
+  }));
+
+  app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const parserError = error as { status?: number; type?: string };
+    if (parserError.type === 'entity.parse.failed') {
+      res.status(400).json({ error: { code: 'invalid-json' } });
+      return;
+    }
+    if (parserError.type === 'entity.too.large') {
+      res.status(413).json({ error: { code: 'request-too-large' } });
+      return;
+    }
+    next(error);
+  });
+
+  app.use(express.static(FRONTEND_DIST));
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  });
+  return app;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(modulePath)) {
+  createApp().listen(PORT, () => {
+    console.log(`HousePlan: http://localhost:${PORT} (данные: ${DATA_DIR})`);
+  });
+}
