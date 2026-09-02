@@ -4,7 +4,6 @@ import {
   diffPlacements,
   livePlacements,
   objectLocation,
-  projectedZonesForFloor,
   roomLabel,
 } from '@houseplan/shared';
 import { api, fileFailureMessage, type ImportCard, type ProjectSummary } from './api';
@@ -342,15 +341,6 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
   if (!project) return <p className="page">Загрузка…</p>;
 
   const floor = project.floors.find((f) => f.id === activeFloor) ?? null;
-  const highlightIds = (() => {
-    if (compareWith === null) return undefined;
-    const snapshot = project.snapshots.find((s) => s.id === compareWith);
-    if (!snapshot) return undefined;
-    const diff = diffPlacements(snapshot.placements, livePlacements(project));
-    return new Set([...diff.moved.map((m) => m.object.id), ...diff.added.map((p) => p.object.id)]);
-  })();
-  const projected = floor ? projectedZonesForFloor(project, floor.id) : [];
-
   return (
     <div className="page">
       <div className="row">
@@ -556,9 +546,7 @@ function ProjectPage({ name, onExit, onRenamed }: { name: string; onExit: () => 
               <FloorView
                 project={project}
                 floorId={floor.id}
-                objects={project.objects}
-                projectedZones={projected}
-                highlight={highlightIds}
+                compareSnapshotId={compareWith ?? undefined}
                 onIntent={store.dispatch}
               />
               <StockPanel

@@ -1,7 +1,12 @@
 import type { OpeningKind } from '@houseplan/shared';
 import { CommitInput } from '../../CommitInput';
-import { OPENING_LABELS } from '../../planScene';
 import type { EditorIntent, EditorSessionSnapshot } from '../editorSession';
+
+const OPENING_LABELS: Record<OpeningKind, string> = {
+  window: 'Окно',
+  entryDoor: 'Входная дверь',
+  innerDoor: 'Дверь',
+};
 
 export function OpeningsPanel({ state, dispatch }: { state: EditorSessionSnapshot; dispatch: (intent: EditorIntent) => unknown }) {
   const placing = state.tool.kind === 'opening';
