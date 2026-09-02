@@ -42,6 +42,43 @@ function createTestEditor(plan: EditorPlan) {
   });
 }
 
+function closedContour() {
+  return {
+    points: [
+      { id: 1, x: 0, y: 0 },
+      { id: 2, x: 300, y: 0 },
+      { id: 3, x: 300, y: 200 },
+      { id: 4, x: 0, y: 200 },
+    ],
+    thicknesses: {},
+    locks: [],
+    closed: true,
+  };
+}
+
+function closedShellPlan(): Extract<EditorPlan, { kind: 'shell' }> {
+  return {
+    kind: 'shell',
+    name: 'Оболочка этажа',
+    contour: closedContour(),
+    openings: [],
+    openingKinds: ['window', 'entryDoor'],
+  };
+}
+
+function closedRoomPlan(): Extract<EditorPlan, { kind: 'room' }> {
+  return {
+    kind: 'room',
+    name: 'Гостиная',
+    contour: closedContour(),
+    openings: [],
+    openingKinds: ['innerDoor'],
+    zones: [],
+    floors: [],
+    floorId: 1,
+  };
+}
+
 test('сцена этажа рисует толщину оболочки наружу раньше линии контура', () => {
   const project = emptyProject('Дом');
   project.floors.push(floorWithShell());
@@ -53,6 +90,9 @@ test('сцена этажа рисует толщину оболочки нар�
   });
 
   assert.deepEqual(scene.diagnostics, []);
+  assert.equal(Object.isFrozen(scene), true);
+  assert.equal(Object.isFrozen(scene.marks), true);
+  assert.equal(Object.isFrozen(scene.marks[0]), true);
   assert.deepEqual(scene.marks.map(({ kind, role }) => ({ kind, role })), [
     { kind: 'path', role: 'wall-thickness' },
     { kind: 'path', role: 'shell-wall' },
@@ -393,23 +433,8 @@ test('редактор строит отдельную цель мыши для 
 });
 
 test('редактор включает толщину стены в сцену и её границы', () => {
-  const plan: EditorPlan = {
-    kind: 'shell',
-    name: 'Оболочка этажа',
-    contour: {
-      points: [
-        { id: 1, x: 0, y: 0 },
-        { id: 2, x: 300, y: 0 },
-        { id: 3, x: 300, y: 200 },
-        { id: 4, x: 0, y: 200 },
-      ],
-      thicknesses: { 1: 20 },
-      locks: [],
-      closed: true,
-    },
-    openings: [],
-    openingKinds: ['window', 'entryDoor'],
-  };
+  const plan = closedShellPlan();
+  plan.contour.thicknesses = { 1: 20 };
   const session = createTestEditor(plan);
 
   const scene = buildEditableScene(session.getSnapshot());
@@ -432,23 +457,8 @@ test('редактор включает толщину стены в сцену 
 });
 
 test('редактор помечает каждую стену прибитого участка', () => {
-  const plan: EditorPlan = {
-    kind: 'shell',
-    name: 'Оболочка этажа',
-    contour: {
-      points: [
-        { id: 1, x: 0, y: 0 },
-        { id: 2, x: 300, y: 0 },
-        { id: 3, x: 300, y: 200 },
-        { id: 4, x: 0, y: 200 },
-      ],
-      thicknesses: {},
-      locks: [{ aId: 1, bId: 3, length: 500 }],
-      closed: true,
-    },
-    openings: [],
-    openingKinds: ['window', 'entryDoor'],
-  };
+  const plan = closedShellPlan();
+  plan.contour.locks = [{ aId: 1, bId: 3, length: 500 }];
   const session = createTestEditor(plan);
 
   const scene = buildEditableScene(session.getSnapshot());
@@ -484,21 +494,8 @@ test('редактор помечает каждую стену прибитог
 });
 
 test('редактор строит дверной проём и дугу открывания после стен', () => {
-  const plan: EditorPlan = {
-    kind: 'room',
-    name: 'Гостиная',
-    contour: {
-      points: [
-        { id: 1, x: 0, y: 0 },
-        { id: 2, x: 300, y: 0 },
-        { id: 3, x: 300, y: 200 },
-        { id: 4, x: 0, y: 200 },
-      ],
-      thicknesses: {},
-      locks: [],
-      closed: true,
-    },
-    openings: [{
+  const plan = closedRoomPlan();
+  plan.openings.push({
       id: 1,
       kind: 'innerDoor',
       wallPointId: 1,
@@ -507,12 +504,7 @@ test('редактор строит дверной проём и дугу отк
       heightCm: 200,
       opensTo: 'left',
       attributes: [],
-    }],
-    openingKinds: ['innerDoor'],
-    zones: [],
-    floors: [],
-    floorId: 1,
-  };
+  });
   const session = createTestEditor(plan);
 
   const scene = buildEditableScene(session.getSnapshot());
@@ -542,23 +534,8 @@ test('редактор строит дверной проём и дугу отк
 });
 
 test('редактор рисует служебную зону раньше стен, а её точки оставляет сверху', () => {
-  const plan: EditorPlan = {
-    kind: 'room',
-    name: 'Гостиная',
-    contour: {
-      points: [
-        { id: 1, x: 0, y: 0 },
-        { id: 2, x: 300, y: 0 },
-        { id: 3, x: 300, y: 200 },
-        { id: 4, x: 0, y: 200 },
-      ],
-      thicknesses: {},
-      locks: [],
-      closed: true,
-    },
-    openings: [],
-    openingKinds: ['innerDoor'],
-    zones: [{
+  const plan = closedRoomPlan();
+  plan.zones.push({
       id: 10,
       kind: 'stairs',
       name: 'Лестница',
@@ -569,10 +546,7 @@ test('редактор рисует служебную зону раньше с�
       ],
       clearances: { front: 0, back: 0, left: 0, right: 0 },
       attributes: [],
-    }],
-    floors: [],
-    floorId: 1,
-  };
+  });
   const session = createTestEditor(plan);
 
   const scene = buildEditableScene(session.getSnapshot());
@@ -626,23 +600,7 @@ test('редактор рисует служебную зону раньше с�
 });
 
 test('редактор возвращает выбор и цель мыши для точки контура', () => {
-  const plan: EditorPlan = {
-    kind: 'shell',
-    name: 'Оболочка этажа',
-    contour: {
-      points: [
-        { id: 1, x: 0, y: 0 },
-        { id: 2, x: 300, y: 0 },
-        { id: 3, x: 300, y: 200 },
-        { id: 4, x: 0, y: 200 },
-      ],
-      thicknesses: {},
-      locks: [],
-      closed: true,
-    },
-    openings: [],
-    openingKinds: ['window', 'entryDoor'],
-  };
+  const plan = closedShellPlan();
   const session = createTestEditor(plan);
   session.dispatch({
     type: 'canvasClicked',
@@ -673,26 +631,7 @@ test('редактор возвращает выбор и цель мыши дл
 });
 
 test('редактор кладёт активный черновик служебной зоны поверх постоянной сцены', () => {
-  const plan: EditorPlan = {
-    kind: 'room',
-    name: 'Гостиная',
-    contour: {
-      points: [
-        { id: 1, x: 0, y: 0 },
-        { id: 2, x: 300, y: 0 },
-        { id: 3, x: 300, y: 200 },
-        { id: 4, x: 0, y: 200 },
-      ],
-      thicknesses: {},
-      locks: [],
-      closed: true,
-    },
-    openings: [],
-    openingKinds: ['innerDoor'],
-    zones: [],
-    floors: [],
-    floorId: 1,
-  };
+  const plan = closedRoomPlan();
   const session = createTestEditor(plan);
   session.dispatch({
     type: 'toolSelected',
@@ -706,7 +645,7 @@ test('редактор кладёт активный черновик служе
     type: 'canvasClicked',
     event: { position: { x: 100, y: 100 }, target: { kind: 'canvas' } },
   });
-  session.dispatch({ type: 'pointerMoved', position: { x: 150, y: 150 } });
+  session.dispatch({ type: 'pointerMoved', position: { x: 900, y: 900 } });
 
   const scene = buildEditableScene(session.getSnapshot());
   const drafts = scene.marks.filter((mark) => mark.role.startsWith('draft'));
@@ -723,7 +662,7 @@ test('редактор кладёт активный черновик служе
       key: 'draft-preview',
       kind: 'path',
       role: 'draft-preview',
-      points: [{ x: 100, y: 100 }, { x: 150, y: 150 }],
+      points: [{ x: 100, y: 100 }, { x: 900, y: 900 }],
       closed: false,
     },
     {
@@ -739,6 +678,7 @@ test('редактор кладёт активный черновик служе
       at: { x: 100, y: 100 },
     },
   ]);
+  assert.equal(scene.extent.some((point) => point.x === 900 || point.y === 900), false);
   assert.ok(scene.marks.findIndex((mark) => mark.role === 'draft') > scene.marks.findIndex((mark) => mark.role === 'point'));
   session.dispose();
 });

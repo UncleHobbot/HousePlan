@@ -10,7 +10,9 @@ import {
   pointAverage,
   projectedZonesForFloor,
   type Contour,
+  type Opening,
   type Project,
+  type Zone,
   type ZoneKind,
 } from '@houseplan/shared';
 import type { EditorSessionSnapshot } from '../editor/editorSession.js';
@@ -115,12 +117,25 @@ export interface FloorSceneInput {
   readonly compareSnapshotId?: number;
 }
 
-function point({ x, y }: ScenePoint): ScenePoint {
+function toScenePoint({ x, y }: ScenePoint): ScenePoint {
   return { x, y };
 }
 
 function markExtent(mark: SceneMark): readonly ScenePoint[] {
+  if (mark.role === 'contour-preview' || mark.role === 'draft-preview') return [];
   return mark.kind === 'path' ? mark.points : [mark.at];
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    Object.values(value).forEach((child) => deepFreeze(child));
+  }
+  return value;
+}
+
+function finishScene(scene: PlanScene): PlanScene {
+  return deepFreeze(scene);
 }
 
 function wallThicknessBands(contour: Contour): ScenePoint[][] {
@@ -142,8 +157,8 @@ function wallThicknessBands(contour: Contour): ScenePoint[][] {
     const normalX = (dy / length) * thickness * outwardNormalSign;
     const normalY = (-dx / length) * thickness * outwardNormalSign;
     return [[
-      point(start),
-      point(end),
+      toScenePoint(start),
+      toScenePoint(end),
       { x: Math.round(end.x + normalX), y: Math.round(end.y + normalY) },
       { x: Math.round(start.x + normalX), y: Math.round(start.y + normalY) },
     ]];
@@ -158,7 +173,7 @@ function contourThicknessMarks(contour: Contour, prefix: string): ScenePathMark[
     key: `${prefix}-thickness-${wallIds[index] ?? index}`,
     kind: 'path',
     role: 'wall-thickness',
-    points: points.map(point),
+    points: points.map(toScenePoint),
     closed: true,
   }));
 }
@@ -185,14 +200,75 @@ function doorArc(hinge: ScenePoint, other: ScenePoint, centroid: ScenePoint, wid
   });
 }
 
+function buildZoneMarks(zones: readonly Zone[]): {
+  paths: ScenePathMark[];
+  labels: SceneLabelMark[];
+} {
+  return {
+    paths: zones.map((zone) => ({
+      key: `zone-${zone.id}`,
+      kind: 'path',
+      role: 'zone',
+      points: zone.points.map(toScenePoint),
+      closed: true,
+      zoneKind: zone.kind,
+    })),
+    labels: zones.map((zone) => {
+      const center = pointAverage(zone.points);
+      return {
+        key: `zone-label-${zone.id}`,
+        kind: 'label',
+        role: 'zone-label',
+        at: { x: Math.round(center.x), y: Math.round(center.y) },
+        text: `${zone.name}${zone.spansFloors ? ' ⭥' : ''}`,
+        zoneKind: zone.kind,
+      };
+    }),
+  };
+}
+
+function buildOpeningMarks(
+  sources: readonly { contour: Contour; openings: readonly Opening[] }[],
+  diagnostics: SceneDiagnostic[],
+): ScenePathMark[] {
+  return sources.flatMap(({ contour, openings }) => openings.flatMap((opening) => {
+    const segment = openingSegment(contour.points, opening.wallPointId, opening.offsetCm, opening.widthCm);
+    if (!segment) {
+      diagnostics.push({ code: 'opening-detached', openingId: opening.id });
+      return [];
+    }
+    const openingMark: ScenePathMark = {
+      key: `opening-${opening.id}`,
+      kind: 'path',
+      role: opening.kind === 'window' ? 'window' : 'door',
+      points: [toScenePoint(segment.start), toScenePoint(segment.end)],
+      closed: false,
+    };
+    if (opening.kind === 'window') return [openingMark];
+    const hinge = opening.opensTo === 'left' ? segment.start : segment.end;
+    const other = opening.opensTo === 'left' ? segment.end : segment.start;
+    return [openingMark, {
+      key: `door-swing-${opening.id}`,
+      kind: 'path' as const,
+      role: 'door-swing' as const,
+      points: [
+        toScenePoint(hinge),
+        toScenePoint(other),
+        ...doorArc(hinge, other, pointAverage(contour.points), opening.widthCm),
+      ],
+      closed: false,
+    }];
+  }));
+}
+
 export function buildFloorScene(input: FloorSceneInput): PlanScene {
   const floor = input.project.floors.find((item) => item.id === input.floorId);
   if (!floor) {
-    return {
+    return finishScene({
       extent: [],
       marks: [],
       diagnostics: [{ code: 'floor-not-found', floorId: input.floorId }],
-    };
+    });
   }
 
   const diagnostics: SceneDiagnostic[] = [];
@@ -212,14 +288,7 @@ export function buildFloorScene(input: FloorSceneInput): PlanScene {
   }
   const objectsById = new Map(input.project.objects.map((object) => [object.id, object]));
   const placements = floor.rooms.flatMap((room) => room.placements);
-  const zoneMarks: ScenePathMark[] = zones.map((zone) => ({
-    key: `zone-${zone.id}`,
-    kind: 'path',
-    role: 'zone',
-    points: zone.points.map(point),
-    closed: true,
-    zoneKind: zone.kind,
-  }));
+  const zoneMarks = buildZoneMarks(zones);
   const clearanceMarks: ScenePathMark[] = placements.flatMap((placement) => {
     const object = objectsById.get(placement.objectId);
     if (!object) {
@@ -230,7 +299,7 @@ export function buildFloorScene(input: FloorSceneInput): PlanScene {
       key: `object-clearance-${object.id}`,
       kind: 'path' as const,
       role: conflicts.has(object.id) ? 'clearance-conflict' as const : 'clearance' as const,
-      points: clearancePolygon(object, placement).map(point),
+      points: clearancePolygon(object, placement).map(toScenePoint),
       closed: true,
       target: { kind: 'object' as const, objectId: object.id },
     }];
@@ -243,47 +312,24 @@ export function buildFloorScene(input: FloorSceneInput): PlanScene {
     key: 'shell-contour',
     kind: 'path',
     role: 'shell-wall',
-    points: floor.shell.contour.points.map(point),
+    points: floor.shell.contour.points.map(toScenePoint),
     closed: floor.shell.contour.closed,
   };
   const roomMarks: ScenePathMark[] = floor.rooms.map((room) => ({
     key: `room-contour-${room.id}`,
     kind: 'path',
     role: 'room-wall',
-    points: room.contour.points.map(point),
+    points: room.contour.points.map(toScenePoint),
     closed: room.contour.closed,
   }));
-  const openingMarks: ScenePathMark[] = [
+  const openingMarks = buildOpeningMarks([
     { contour: floor.shell.contour, openings: floor.shell.openings },
     ...floor.rooms.map((room) => ({ contour: room.contour, openings: room.openings })),
-  ].flatMap(({ contour, openings }) => openings.flatMap((opening) => {
-    const segment = openingSegment(contour.points, opening.wallPointId, opening.offsetCm, opening.widthCm);
-    if (!segment) {
-      diagnostics.push({ code: 'opening-detached', openingId: opening.id });
-      return [];
-    }
-    const openingMark: ScenePathMark = {
-      key: `opening-${opening.id}`,
-      kind: 'path',
-      role: opening.kind === 'window' ? 'window' : 'door',
-      points: [point(segment.start), point(segment.end)],
-      closed: false,
-    };
-    if (opening.kind === 'window') return [openingMark];
-    const hinge = opening.opensTo === 'left' ? segment.start : segment.end;
-    const other = opening.opensTo === 'left' ? segment.end : segment.start;
-    return [openingMark, {
-      key: `door-swing-${opening.id}`,
-      kind: 'path' as const,
-      role: 'door-swing' as const,
-      points: [point(hinge), point(other), ...doorArc(hinge, other, pointAverage(contour.points), opening.widthCm)],
-      closed: false,
-    }];
-  }));
+  ], diagnostics);
   const objectPaths: ScenePathMark[] = placements.flatMap((placement) => {
     const object = objectsById.get(placement.objectId);
     if (!object) return [];
-    const body = bodyPolygon(object, placement).map(point);
+    const body = bodyPolygon(object, placement).map(toScenePoint);
     const states: SceneState[] = [];
     if (input.selectedObjectId === object.id) states.push('selected');
     if (comparedObjectIds.has(object.id)) states.push('comparison');
@@ -305,17 +351,6 @@ export function buildFloorScene(input: FloorSceneInput): PlanScene {
       target: { kind: 'object' as const, objectId: object.id },
     }];
   });
-  const zoneLabels: SceneLabelMark[] = zones.map((zone) => {
-    const center = pointAverage(zone.points);
-    return {
-      key: `zone-label-${zone.id}`,
-      kind: 'label',
-      role: 'zone-label',
-      at: { x: Math.round(center.x), y: Math.round(center.y) },
-      text: `${zone.name}${zone.spansFloors ? ' ⭥' : ''}`,
-      zoneKind: zone.kind,
-    };
-  });
   const objectLabels: SceneLabelMark[] = placements.flatMap((placement) => {
     const object = objectsById.get(placement.objectId);
     if (!object) return [];
@@ -323,28 +358,28 @@ export function buildFloorScene(input: FloorSceneInput): PlanScene {
       key: `object-label-${object.id}`,
       kind: 'label' as const,
       role: 'object-label' as const,
-      at: point(placement),
+      at: toScenePoint(placement),
       text: object.name,
       target: { kind: 'object' as const, objectId: object.id },
     }];
   });
   const marks: SceneMark[] = [
-    ...zoneMarks,
+    ...zoneMarks.paths,
     ...clearanceMarks,
     ...thicknessMarks,
     shellMark,
     ...roomMarks,
     ...openingMarks,
     ...objectPaths,
-    ...zoneLabels,
+    ...zoneMarks.labels,
     ...objectLabels,
   ];
 
-  return {
+  return finishScene({
     extent: marks.flatMap(markExtent),
     marks,
     diagnostics,
-  };
+  });
 }
 
 export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScene {
@@ -364,7 +399,7 @@ export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScen
             points[wallIndex].y !== points[(wallIndex + 1) % points.length].y
           ? 'wall-diagonal'
           : 'wall',
-    points: [point(points[wallIndex]), point(points[(wallIndex + 1) % points.length])],
+    points: [toScenePoint(points[wallIndex]), toScenePoint(points[(wallIndex + 1) % points.length])],
     closed: false,
     target: { kind: 'wall', wallIndex },
   }));
@@ -382,57 +417,15 @@ export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScen
     };
   }) : [];
   const diagnostics: SceneDiagnostic[] = [];
-  const openingMarks: ScenePathMark[] = editorState.plan.contour.closed
-    ? editorState.plan.openings.flatMap((opening) => {
-      const segment = openingSegment(points, opening.wallPointId, opening.offsetCm, opening.widthCm);
-      if (!segment) {
-        diagnostics.push({ code: 'opening-detached', openingId: opening.id });
-        return [];
-      }
-      const openingMark: ScenePathMark = {
-        key: `opening-${opening.id}`,
-        kind: 'path',
-        role: opening.kind === 'window' ? 'window' : 'door',
-        points: [point(segment.start), point(segment.end)],
-        closed: false,
-      };
-      if (opening.kind === 'window') return [openingMark];
-      const hinge = opening.opensTo === 'left' ? segment.start : segment.end;
-      const other = opening.opensTo === 'left' ? segment.end : segment.start;
-      const centroid = pointAverage(points);
-      return [openingMark, {
-        key: `door-swing-${opening.id}`,
-        kind: 'path' as const,
-        role: 'door-swing' as const,
-        points: [point(hinge), point(other), ...doorArc(hinge, other, centroid, opening.widthCm)],
-        closed: false,
-      }];
-    })
+  const openingMarks = editorState.plan.contour.closed
+    ? buildOpeningMarks([{ contour: editorState.plan.contour, openings: editorState.plan.openings }], diagnostics)
     : [];
-  const zoneMarks: ScenePathMark[] = zones.map((zone) => ({
-    key: `zone-${zone.id}`,
-    kind: 'path',
-    role: 'zone',
-    points: zone.points.map(point),
-    closed: true,
-    zoneKind: zone.kind,
-  }));
-  const zoneLabels: SceneLabelMark[] = zones.map((zone) => {
-    const center = pointAverage(zone.points);
-    return {
-      key: `zone-label-${zone.id}`,
-      kind: 'label',
-      role: 'zone-label',
-      at: { x: Math.round(center.x), y: Math.round(center.y) },
-      text: `${zone.name}${zone.spansFloors ? ' ⭥' : ''}`,
-      zoneKind: zone.kind,
-    };
-  });
+  const zoneMarks = buildZoneMarks(zones);
   const zonePoints: SceneMarkerMark[] = zones.flatMap((zone) => zone.points.map((zonePoint) => ({
     key: `zone-point-${zonePoint.id}`,
     kind: 'marker' as const,
     role: 'zone-point' as const,
-    at: point(zonePoint),
+    at: toScenePoint(zonePoint),
     zoneKind: zone.kind,
     target: { kind: 'zoneVertex' as const, zoneId: zone.id, pointId: zonePoint.id },
   })));
@@ -448,7 +441,7 @@ export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScen
       key: `point-${contourPoint.id}`,
       kind: 'marker',
       role: 'point',
-      at: point(contourPoint),
+      at: toScenePoint(contourPoint),
       target: { kind: 'point', pointId: contourPoint.id },
       states,
     };
@@ -457,7 +450,7 @@ export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScen
     key: `point-label-${contourPoint.id}`,
     kind: 'label',
     role: 'point-label',
-    at: point(contourPoint),
+    at: toScenePoint(contourPoint),
     text: `А${contourPoint.id}`,
   }));
   const contourPreview: ScenePathMark[] = !editorState.plan.contour.closed && points.length > 0 && editorState.canvas.pointer
@@ -465,7 +458,7 @@ export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScen
       key: 'contour-preview',
       kind: 'path',
       role: 'contour-preview',
-      points: [point(points.at(-1)!), point(editorState.canvas.pointer)],
+      points: [toScenePoint(points.at(-1)!), toScenePoint(editorState.canvas.pointer)],
       closed: false,
     }]
     : [];
@@ -479,7 +472,7 @@ export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScen
         key: 'draft-zone',
         kind: 'path',
         role: 'draft',
-        points: draft.points.map(point),
+        points: draft.points.map(toScenePoint),
         closed: false,
       });
     }
@@ -489,7 +482,7 @@ export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScen
         key: 'draft-preview',
         kind: 'path',
         role: 'draft-preview',
-        points: [point(lastDraftPoint), point(editorState.canvas.pointer)],
+        points: [toScenePoint(lastDraftPoint), toScenePoint(editorState.canvas.pointer)],
         closed: false,
       });
     }
@@ -497,25 +490,25 @@ export function buildEditableScene(editorState: EditorSessionSnapshot): PlanScen
       key: `draft-point-${index}`,
       kind: 'marker' as const,
       role: 'draft-point' as const,
-      at: point(draftPoint),
+      at: toScenePoint(draftPoint),
     })));
   }
   const marks: SceneMark[] = [
-    ...zoneMarks,
+    ...zoneMarks.paths,
     ...thicknessMarks,
     ...wallMarks,
     ...openingMarks,
     ...wallLabels,
-    ...zoneLabels,
+    ...zoneMarks.labels,
     ...pointLabels,
     ...zonePoints,
     ...pointMarks,
     ...contourPreview,
     ...draftMarks,
   ];
-  return {
+  return finishScene({
     extent: marks.flatMap(markExtent),
     marks,
     diagnostics,
-  };
+  });
 }

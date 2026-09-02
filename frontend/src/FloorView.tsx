@@ -25,7 +25,14 @@ export function FloorView({ project, floorId, compareSnapshotId, onIntent }: {
   const scene = buildFloorScene({ project, floorId, selectedObjectId: selected, compareSnapshotId });
 
   if (!floor) return <p className="muted">Этаж не найден.</p>;
-  if (scene.extent.length === 0) return <p className="muted">Этаж пуст.</p>;
+  if (scene.extent.length === 0) {
+    return (
+      <div>
+        {scene.diagnostics.length > 0 ? <p className="bad-text">Часть плана не удалось показать.</p> : null}
+        <p className="muted">Этаж пуст.</p>
+      </div>
+    );
+  }
 
   const viewport = createViewport(scene.extent, { width: STAGE_WIDTH, height: STAGE_HEIGHT, padding: STAGE_PADDING });
   const selectedObject = project.objects.find((object) => object.id === selected);
